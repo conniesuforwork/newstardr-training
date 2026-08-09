@@ -174,6 +174,8 @@ async function loadProgress(){ return apiGet('lms-progress', {}); }
 async function saveProgress(obj){ await apiSet('lms-progress', obj); }
 async function loadCurrentUser(){ return storageGet('lms-current-user', null); }
 async function saveCurrentUser(id){ storageSet('lms-current-user', id); }
+async function loadAdminPassword(){ return apiGet('lms-admin-password', 'admin123'); }
+async function saveAdminPassword(pw){ await apiSet('lms-admin-password', pw); }
 
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 function todayLabel(){
@@ -188,13 +190,21 @@ function ytId(url){
 }
 
 /* ---------- App state ---------- */
-let STATE = { view:'dashboard', staff:[], courses:[], progress:{}, currentUserId:null, selectedCourseId:null, quizAnswers:{}, quizResult:null, player:null };
+let STATE = { view:'dashboard', staff:[], courses:[], progress:{}, currentUserId:null, selectedCourseId:null, quizAnswers:{}, quizResult:null, player:null, adminPassword:'admin123', adminAuthed:false };
+
+async function promptAdminPassword(){
+  const pw = prompt('此身分為管理員,請輸入管理員密碼以繼續:');
+  if(pw === STATE.adminPassword) return true;
+  if(pw !== null) alert('密碼錯誤,將以一般人員權限顯示。');
+  return false;
+}
 
 async function initApp(){
   document.getElementById('main').innerHTML = '<div class="empty" style="padding:80px 0;">資料載入中,請稍候...</div>';
   STATE.staff = await loadStaff();
   STATE.courses = await loadCourses();
   STATE.progress = await loadProgress();
+  STATE.adminPassword = await loadAdminPassword();
   STATE.currentUserId = await loadCurrentUser();
   if(STATE.staff.length===0){
     STATE.staff = [
@@ -206,6 +216,11 @@ async function initApp(){
     STATE.currentUserId = STATE.staff[0].id;
     await saveCurrentUser(STATE.currentUserId);
   }
+  const hasAnyAdmin = STATE.staff.some(s=>s.role==='admin');
+  const cu = STATE.staff.find(s=>s.id===STATE.currentUserId);
+  if(hasAnyAdmin && cu && cu.role==='admin'){
+    STATE.adminAuthed = await promptAdminPassword();
+  }
   if(STATE.courses.length>0) STATE.selectedCourseId = STATE.courses[0].id;
   if(!isAdmin() && ['dashboard','staff','reports'].includes(STATE.view)) STATE.view = 'courses';
   bindNav();
@@ -215,8 +230,11 @@ async function initApp(){
 }
 
 function isAdmin(){
+  const hasAnyAdmin = STATE.staff.some(s=>s.role==='admin');
+  if(!hasAnyAdmin) return true; // fail-safe: never lock everyone out if no admin is set
   const u = currentUser();
-  return !!(u && u.role === 'admin');
+  if(!u || u.role!=='admin') return false;
+  return !!STATE.adminAuthed;
 }
 
 function updateNavVisibility(){
@@ -247,8 +265,16 @@ function renderUserSelect(){
   const sel = document.getElementById('currentUserSelect');
   sel.innerHTML = STATE.staff.map(s=>`<option value="${s.id}" ${s.id===STATE.currentUserId?'selected':''}>${escapeHtml(s.name)}${s.role==='admin'?'(管理員)':''}</option>`).join('');
   sel.onchange = async ()=>{
-    STATE.currentUserId = sel.value;
+    const newId = sel.value;
+    const newStaff = STATE.staff.find(s=>s.id===newId);
+    STATE.currentUserId = newId;
     await saveCurrentUser(STATE.currentUserId);
+    const hasAnyAdmin = STATE.staff.some(s=>s.role==='admin');
+    if(hasAnyAdmin && newStaff && newStaff.role==='admin'){
+      STATE.adminAuthed = await promptAdminPassword();
+    } else {
+      STATE.adminAuthed = false;
+    }
     updateNavVisibility();
     render();
   };
@@ -601,7 +627,10 @@ function renderStaff(){
   return `
   <div class="topbar">
     <h1>人員管理</h1>
-    <button class="btn accent" onclick="showAddStaffForm()">+ 新增人員</button>
+    <div>
+      <button class="btn ghost" onclick="changeAdminPassword()">變更管理員密碼</button>
+      <button class="btn accent" onclick="showAddStaffForm()">+ 新增人員</button>
+    </div>
   </div>
   <div id="addStaffFormWrap"></div>
   <div class="card">
@@ -697,6 +726,19 @@ async function submitEditStaff(id){
   updateNavVisibility();
   render();
 }
+async function changeAdminPassword(){
+  const current = prompt('請輸入目前的管理員密碼:');
+  if(current === null) return;
+  if(current !== STATE.adminPassword){ alert('目前密碼不正確'); return; }
+  const next = prompt('請輸入新密碼:');
+  if(!next) return;
+  const confirmPw = prompt('請再輸入一次新密碼確認:');
+  if(next !== confirmPw){ alert('兩次輸入的新密碼不一致,請重新操作。'); return; }
+  STATE.adminPassword = next;
+  await saveAdminPassword(next);
+  alert('管理員密碼已更新。');
+}
+
 async function deleteStaff(id){
   if(STATE.staff.length<=1){ alert('至少需保留一位人員'); return; }
   if(!confirm('確定刪除此人員?學習紀錄將一併移除。')) return;

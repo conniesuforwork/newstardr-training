@@ -6,35 +6,35 @@
 <title>欣莘醫美集團內部教育訓練</title>
 <style>
   :root{
-    --sidebar:#16241f;
-    --sidebar-active:#213631;
-    --bg:#f6f4ee;
-    --card:#ffffff;
-    --accent:#ff6a3d;
-    --accent-soft:#ffe4d8;
-    --text:#1c211f;
-    --sub:#767f7b;
-    --border:#e7e3da;
-    --ok:#2fae7e;
-    --warn:#e0a52c;
+    --sidebar:#4a423d;
+    --sidebar-active:#5a5049;
+    --bg:#f3ede6;
+    --card:#fffdfb;
+    --accent:#b98d7c;
+    --accent-soft:#ede1da;
+    --text:#3d3733;
+    --sub:#948a80;
+    --border:#e6ddd2;
+    --ok:#8b9a83;
+    --warn:#c6a26a;
   }
   *{box-sizing:border-box;}
   body{margin:0;font-family:"PingFang TC","Microsoft JhengHei","Noto Sans TC",sans-serif;background:var(--bg);color:var(--text);}
   .app{display:flex;min-height:100vh;}
   /* Sidebar */
-  .sidebar{width:230px;background:var(--sidebar);color:#cfe0d8;flex-shrink:0;padding:22px 14px;display:flex;flex-direction:column;}
+  .sidebar{width:230px;background:var(--sidebar);color:#e3dcd4;flex-shrink:0;padding:22px 14px;display:flex;flex-direction:column;}
   .brand{display:flex;align-items:center;gap:10px;padding:0 8px 22px 8px;}
   .brand .logo{width:36px;height:36px;border-radius:10px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:18px;}
   .brand .name{font-weight:800;font-size:16px;color:#fff;letter-spacing:0.5px;}
-  .brand .sub{font-size:10px;letter-spacing:2px;color:#7e9188;}
-  .nav-label{font-size:11px;color:#657b71;padding:14px 10px 6px;letter-spacing:1px;}
-  .nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;cursor:pointer;font-size:14px;color:#c9d8d1;margin-bottom:2px;}
-  .nav-item:hover{background:#1c2e28;}
+  .brand .sub{font-size:10px;letter-spacing:2px;color:#a89b8f;}
+  .nav-label{font-size:11px;color:#8f8177;padding:14px 10px 6px;letter-spacing:1px;}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;cursor:pointer;font-size:14px;color:#d8cfc5;margin-bottom:2px;}
+  .nav-item:hover{background:#5a5049;}
   .nav-item.active{background:var(--sidebar-active);color:#fff;font-weight:600;}
   .nav-item .ico{width:18px;text-align:center;}
-  .user-box{margin-top:auto;padding:12px;border-top:1px solid #223832;}
-  .user-box select{width:100%;background:#1c2e28;color:#fff;border:1px solid #2c443c;border-radius:8px;padding:8px;font-size:13px;}
-  .user-box label{font-size:11px;color:#7e9188;display:block;margin-bottom:6px;}
+  .user-box{margin-top:auto;padding:12px;border-top:1px solid #5a5049;}
+  .user-box select{width:100%;background:#5a5049;color:#fff;border:1px solid #6b6058;border-radius:8px;padding:8px;font-size:13px;}
+  .user-box label{font-size:11px;color:#a89b8f;display:block;margin-bottom:6px;}
 
   /* Main */
   .main{flex:1;padding:28px 34px;overflow-x:hidden;}
@@ -44,7 +44,7 @@
   .btn{background:var(--sidebar);color:#fff;border:none;padding:10px 16px;border-radius:8px;font-size:13px;cursor:pointer;font-weight:600;}
   .btn:hover{background:#213631;}
   .btn.accent{background:var(--accent);}
-  .btn.accent:hover{background:#e85a2c;}
+  .btn.accent:hover{background:#a67a67;}
   .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--border);}
   .btn.small{padding:6px 10px;font-size:12px;}
 
@@ -61,9 +61,9 @@
   td{padding:12px;border-bottom:1px solid var(--border);}
   tr:last-child td{border-bottom:none;}
   .pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;}
-  .pill.ok{background:#e2f6ec;color:var(--ok);}
-  .pill.warn{background:#fdf1dc;color:var(--warn);}
-  .pill.off{background:#f0efe9;color:var(--sub);}
+  .pill.ok{background:#e6ebe2;color:var(--ok);}
+  .pill.warn{background:#f5ecdd;color:var(--warn);}
+  .pill.off{background:#efe9e2;color:var(--sub);}
 
   .form-row{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap;}
   input[type=text],input[type=number],input[type=email],textarea,select.field{
@@ -91,8 +91,8 @@
   .icon-btn{background:none;border:none;cursor:pointer;color:var(--sub);font-size:13px;}
   .icon-btn:hover{color:var(--accent);}
   .result-banner{padding:14px;border-radius:10px;margin-bottom:14px;font-size:14px;font-weight:700;}
-  .result-banner.pass{background:#e2f6ec;color:var(--ok);}
-  .result-banner.fail{background:#fdeeee;color:#d9534f;}
+  .result-banner.pass{background:#e6ebe2;color:var(--ok);}
+  .result-banner.fail{background:#f3e4de;color:#b06a54;}
   @media(max-width:900px){
     .app{flex-direction:column;}
     .sidebar{width:100%;flex-direction:row;flex-wrap:wrap;}
@@ -261,20 +261,36 @@ function bindNav(){
   });
 }
 
+async function verifyIdentitySwitch(staffObj){
+  if(staffObj.email){
+    const input = prompt('請輸入「'+staffObj.name+'」的Email以確認身分:');
+    if(input===null) return false;
+    if(input.trim().toLowerCase() !== staffObj.email.trim().toLowerCase()){
+      alert('Email不正確,無法切換身分。');
+      return false;
+    }
+  }
+  const hasAnyAdmin = STATE.staff.some(s=>s.role==='admin');
+  if(hasAnyAdmin && staffObj.role==='admin'){
+    return await promptAdminPassword();
+  }
+  return true;
+}
+
 function renderUserSelect(){
   const sel = document.getElementById('currentUserSelect');
   sel.innerHTML = STATE.staff.map(s=>`<option value="${s.id}" ${s.id===STATE.currentUserId?'selected':''}>${escapeHtml(s.name)}${s.role==='admin'?'(管理員)':''}</option>`).join('');
   sel.onchange = async ()=>{
     const newId = sel.value;
     const newStaff = STATE.staff.find(s=>s.id===newId);
+    const ok = await verifyIdentitySwitch(newStaff);
+    if(!ok){
+      sel.value = STATE.currentUserId;
+      return;
+    }
     STATE.currentUserId = newId;
     await saveCurrentUser(STATE.currentUserId);
-    const hasAnyAdmin = STATE.staff.some(s=>s.role==='admin');
-    if(hasAnyAdmin && newStaff && newStaff.role==='admin'){
-      STATE.adminAuthed = await promptAdminPassword();
-    } else {
-      STATE.adminAuthed = false;
-    }
+    STATE.adminAuthed = (newStaff.role==='admin');
     updateNavVisibility();
     render();
   };
@@ -381,9 +397,18 @@ function renderCourses(){
               ${prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill warn">待測驗</span>':'')}
             </div>
           </div>
+          ${selected.materials && selected.materials.length? `
+            <div style="margin-top:14px;">
+              <div class="muted" style="margin-bottom:6px;">課程講義</div>
+              ${selected.materials.map(m=>`<div style="margin-bottom:4px;"><a href="${escapeHtml(m.url)}" target="_blank" rel="noopener" class="btn ghost small" style="text-decoration:none;display:inline-block;">📄 ${escapeHtml(m.name||'講義')}</a></div>`).join('')}
+            </div>
+          ` : ''}
           <div class="muted" style="margin-top:10px;">累計觀看時間:${Math.floor((prog?.watchSeconds||0)/60)} 分 ${Math.floor((prog?.watchSeconds||0)%60)} 秒</div>
           ${selected.quiz && selected.quiz.length? `<button class="btn ghost small" style="margin-top:10px;" onclick="goToQuiz('${selected.id}')">前往測驗 →</button>`:''}
-          <button class="icon-btn" style="margin-top:10px;float:right;" onclick="deleteCourse('${selected.id}')">刪除此課程</button>
+          <div style="margin-top:10px;">
+            <button class="btn ghost small" onclick="showEditCourseForm('${selected.id}')">編輯課程</button>
+            <button class="icon-btn" style="margin-left:10px;" onclick="deleteCourse('${selected.id}')">刪除此課程</button>
+          </div>
         </div>
       ` : '<div class="card empty">尚未選擇課程,請先新增或於右側選擇。</div>'}
     </div>
@@ -405,21 +430,33 @@ function renderCourses(){
 
 function selectCourse(id){ STATE.selectedCourseId=id; render(); }
 
+function courseFormInnerHtml(c){
+  c = c || {title:'', desc:'', videoUrl:''};
+  return `
+    <div class="form-row">
+      <input type="text" id="courseFormTitle" placeholder="課程名稱" value="${escapeHtml(c.title)}">
+      <input type="text" id="courseFormVideo" placeholder="YouTube 影片連結(建議設為不公開)" value="${escapeHtml(c.videoUrl||'')}">
+    </div>
+    <textarea id="courseFormDesc" placeholder="課程說明(選填)">${escapeHtml(c.desc||'')}</textarea>
+    <div class="muted" style="margin:8px 0;">課程講義(PDF連結,可新增多份)</div>
+    <div id="materialBuilder"></div>
+    <div class="form-row" style="margin-top:4px;margin-bottom:14px;">
+      <button class="btn ghost small" onclick="addMaterialRow()">+ 新增講義</button>
+    </div>
+    <div class="muted" style="margin:8px 0;">測驗題目(選填)</div>
+    <div id="qBuilder"></div>
+    <div class="form-row" style="margin-top:8px;">
+      <button class="btn ghost small" onclick="addQuestionRow()">+ 新增題目</button>
+    </div>
+  `;
+}
+
 function showAddCourseForm(){
   const wrap = document.getElementById('addCourseFormWrap');
   wrap.innerHTML = `
     <div class="card" style="margin-bottom:16px;">
       <div class="section-title" style="margin-top:0;">新增課程</div>
-      <div class="form-row">
-        <input type="text" id="newCourseTitle" placeholder="課程名稱">
-        <input type="text" id="newCourseVideo" placeholder="YouTube 影片連結(建議設為不公開)">
-      </div>
-      <textarea id="newCourseDesc" placeholder="課程說明(選填)"></textarea>
-      <div class="muted" style="margin:8px 0;">測驗題目(選填,可稍後於測驗中心編輯)</div>
-      <div id="qBuilder"></div>
-      <div class="form-row" style="margin-top:8px;">
-        <button class="btn ghost small" onclick="addQuestionRow()">+ 新增題目</button>
-      </div>
+      ${courseFormInnerHtml(null)}
       <div class="form-row" style="margin-top:10px;">
         <button class="btn accent" onclick="submitNewCourse()">儲存課程</button>
         <button class="btn ghost" onclick="document.getElementById('addCourseFormWrap').innerHTML=''">取消</button>
@@ -429,30 +466,62 @@ function showAddCourseForm(){
   addQuestionRow();
 }
 
-function addQuestionRow(){
+function showEditCourseForm(id){
+  const c = STATE.courses.find(x=>x.id===id);
+  if(!c) return;
+  const wrap = document.getElementById('addCourseFormWrap');
+  wrap.innerHTML = `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="section-title" style="margin-top:0;">編輯課程</div>
+      ${courseFormInnerHtml(c)}
+      <div class="form-row" style="margin-top:10px;">
+        <button class="btn accent" onclick="submitEditCourse('${id}')">儲存變更</button>
+        <button class="btn ghost" onclick="document.getElementById('addCourseFormWrap').innerHTML=''">取消</button>
+      </div>
+    </div>
+  `;
+  (c.quiz && c.quiz.length? c.quiz : [null]).forEach(q=> addQuestionRow(q));
+  (c.materials || []).forEach(m=> addMaterialRow(m));
+  wrap.scrollIntoView({behavior:'smooth'});
+}
+
+function addQuestionRow(prefill){
   const b = document.getElementById('qBuilder');
   const idx = b.children.length;
   const row = document.createElement('div');
   row.className='quiz-q';
+  const opts = prefill? prefill.options : ['','','',''];
   row.innerHTML = `
-    <input type="text" class="qtext" placeholder="題目 ${idx+1}">
-    <div class="opt-row"><input type="text" class="qopt" placeholder="選項 A"></div>
-    <div class="opt-row"><input type="text" class="qopt" placeholder="選項 B"></div>
-    <div class="opt-row"><input type="text" class="qopt" placeholder="選項 C"></div>
-    <div class="opt-row"><input type="text" class="qopt" placeholder="選項 D"></div>
+    <input type="text" class="qtext" placeholder="題目 ${idx+1}" value="${escapeHtml(prefill? prefill.q:'')}">
+    <div class="opt-row"><input type="text" class="qopt" placeholder="選項 A" value="${escapeHtml(opts[0]||'')}"></div>
+    <div class="opt-row"><input type="text" class="qopt" placeholder="選項 B" value="${escapeHtml(opts[1]||'')}"></div>
+    <div class="opt-row"><input type="text" class="qopt" placeholder="選項 C" value="${escapeHtml(opts[2]||'')}"></div>
+    <div class="opt-row"><input type="text" class="qopt" placeholder="選項 D" value="${escapeHtml(opts[3]||'')}"></div>
     <div class="opt-row">
       <span class="muted">正確答案(0=A,1=B,2=C,3=D):</span>
-      <input type="number" class="qanswer" min="0" max="3" value="0" style="width:60px;flex:none;">
+      <input type="number" class="qanswer" min="0" max="3" value="${prefill? prefill.answer:0}" style="width:60px;flex:none;">
+      <button class="icon-btn" onclick="this.closest('.quiz-q').remove()">移除題目</button>
     </div>
   `;
   b.appendChild(row);
 }
 
-async function submitNewCourse(){
-  const title = document.getElementById('newCourseTitle').value.trim();
-  const video = document.getElementById('newCourseVideo').value.trim();
-  const desc = document.getElementById('newCourseDesc').value.trim();
-  if(!title || !ytId(video)){ alert('請填寫課程名稱與有效的 YouTube 連結'); return; }
+function addMaterialRow(prefill){
+  const b = document.getElementById('materialBuilder');
+  const row = document.createElement('div');
+  row.className='form-row';
+  row.innerHTML = `
+    <input type="text" class="matname" placeholder="講義名稱(例如:第一章講義)" value="${escapeHtml(prefill? prefill.name:'')}">
+    <input type="text" class="materialUrl" placeholder="PDF連結(建議用Google Drive共用連結)" value="${escapeHtml(prefill? prefill.url:'')}">
+    <button class="icon-btn" onclick="this.parentElement.remove()">移除</button>
+  `;
+  b.appendChild(row);
+}
+
+function readCourseForm(){
+  const title = document.getElementById('courseFormTitle').value.trim();
+  const video = document.getElementById('courseFormVideo').value.trim();
+  const desc = document.getElementById('courseFormDesc').value.trim();
   const qRows = document.querySelectorAll('#qBuilder .quiz-q');
   const quiz = [];
   qRows.forEach(row=>{
@@ -461,10 +530,34 @@ async function submitNewCourse(){
     const answer = parseInt(row.querySelector('.qanswer').value,10);
     if(qtext && opts.every(o=>o)) quiz.push({q:qtext, options:opts, answer});
   });
-  const course = {id:uid(), title, desc, videoUrl:video, quiz};
+  const matRows = document.querySelectorAll('#materialBuilder .form-row');
+  const materials = [];
+  matRows.forEach(row=>{
+    const name = row.querySelector('.matname').value.trim();
+    const url = row.querySelector('.materialUrl').value.trim();
+    if(url) materials.push({name: name || '講義', url});
+  });
+  return {title, video, desc, quiz, materials};
+}
+
+async function submitNewCourse(){
+  const f = readCourseForm();
+  if(!f.title || !ytId(f.video)){ alert('請填寫課程名稱與有效的 YouTube 連結'); return; }
+  const course = {id:uid(), title:f.title, desc:f.desc, videoUrl:f.video, quiz:f.quiz, materials:f.materials};
   STATE.courses.push(course);
   await saveCourses(STATE.courses);
   STATE.selectedCourseId = course.id;
+  document.getElementById('addCourseFormWrap').innerHTML='';
+  render();
+}
+
+async function submitEditCourse(id){
+  const f = readCourseForm();
+  if(!f.title || !ytId(f.video)){ alert('請填寫課程名稱與有效的 YouTube 連結'); return; }
+  const c = STATE.courses.find(x=>x.id===id);
+  if(!c) return;
+  c.title = f.title; c.desc = f.desc; c.videoUrl = f.video; c.quiz = f.quiz; c.materials = f.materials;
+  await saveCourses(STATE.courses);
   document.getElementById('addCourseFormWrap').innerHTML='';
   render();
 }
@@ -548,6 +641,14 @@ function goToQuiz(courseId){
   render();
 }
 
+function goToCourseEdit(courseId){
+  STATE.selectedCourseId = courseId;
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.view==='courses'));
+  STATE.view='courses';
+  render();
+  showEditCourseForm(courseId);
+}
+
 /* ---------- Quiz ---------- */
 function renderQuiz(){
   const u = currentUser();
@@ -588,7 +689,10 @@ function renderQuizBody(course, u){
   }
   return `
   <div class="card">
-    <h3 style="margin-top:0;">${escapeHtml(course.title)} — 測驗</h3>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+      <h3 style="margin-top:0;">${escapeHtml(course.title)} — 測驗</h3>
+      ${isAdmin()? `<button class="btn ghost small" onclick="goToCourseEdit('${course.id}')">編輯此測驗</button>` : ''}
+    </div>
     ${course.quiz.map((q,i)=>`
       <div class="quiz-q">
         <div style="font-weight:600;margin-bottom:6px;">${i+1}. ${escapeHtml(q.q)}</div>
@@ -662,7 +766,7 @@ function staffFormHtml(s){
     <div class="form-row">
       <input type="text" id="staffFormName" placeholder="姓名" value="${escapeHtml(s.name)}">
       <input type="text" id="staffFormDept" placeholder="部門/職稱" value="${escapeHtml(s.dept)}">
-      <input type="email" id="staffFormEmail" placeholder="Email(選填)" value="${escapeHtml(s.email)}">
+      <input type="email" id="staffFormEmail" placeholder="Email(用來驗證身分,建議務必填寫)" value="${escapeHtml(s.email)}">
       <select class="field" id="staffFormRole" style="max-width:140px;">
         <option value="staff" ${s.role!=='admin'?'selected':''}>一般人員</option>
         <option value="admin" ${s.role==='admin'?'selected':''}>管理員</option>
@@ -707,6 +811,7 @@ function readStaffForm(){
 async function submitNewStaff(){
   const f = readStaffForm();
   if(!f.name){ alert('請輸入姓名'); return; }
+  if(!f.email){ if(!confirm('未填寫Email的話,任何人都能不驗證身分就切換成這個人,確定要不填嗎?')) return; }
   STATE.staff.push({id:uid(), name:f.name, dept:f.dept, email:f.email, role:f.role});
   await saveStaff(STATE.staff);
   document.getElementById('addStaffFormWrap').innerHTML='';

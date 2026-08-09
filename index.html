@@ -112,11 +112,11 @@
       </div>
     </div>
     <div class="nav-label">工作空間</div>
-    <div class="nav-item active" data-view="dashboard"><span class="ico">◆</span>營運總覽</div>
+    <div class="nav-item active" data-view="dashboard" data-admin-only="1"><span class="ico">◆</span>營運總覽</div>
     <div class="nav-item" data-view="courses"><span class="ico">▣</span>課程與影片</div>
     <div class="nav-item" data-view="quiz"><span class="ico">✓</span>測驗中心</div>
-    <div class="nav-item" data-view="staff"><span class="ico">◎</span>人員管理</div>
-    <div class="nav-item" data-view="reports"><span class="ico">↗</span>學習報表</div>
+    <div class="nav-item" data-view="staff" data-admin-only="1"><span class="ico">◎</span>人員管理</div>
+    <div class="nav-item" data-view="reports" data-admin-only="1"><span class="ico">↗</span>學習報表</div>
     <div class="user-box">
       <label>目前身分</label>
       <select id="currentUserSelect"></select>
@@ -198,7 +198,7 @@ async function initApp(){
   STATE.currentUserId = await loadCurrentUser();
   if(STATE.staff.length===0){
     STATE.staff = [
-      {id:uid(), name:'管理員', dept:'教育訓練管理員', email:''},
+      {id:uid(), name:'管理員', dept:'教育訓練管理員', email:'', role:'admin'},
     ];
     await saveStaff(STATE.staff);
   }
@@ -207,9 +207,27 @@ async function initApp(){
     await saveCurrentUser(STATE.currentUserId);
   }
   if(STATE.courses.length>0) STATE.selectedCourseId = STATE.courses[0].id;
+  if(!isAdmin() && ['dashboard','staff','reports'].includes(STATE.view)) STATE.view = 'courses';
   bindNav();
   renderUserSelect();
+  updateNavVisibility();
   render();
+}
+
+function isAdmin(){
+  const u = currentUser();
+  return !!(u && u.role === 'admin');
+}
+
+function updateNavVisibility(){
+  const admin = isAdmin();
+  document.querySelectorAll('.nav-item[data-admin-only]').forEach(el=>{
+    el.style.display = admin ? '' : 'none';
+  });
+  if(!admin && ['dashboard','staff','reports'].includes(STATE.view)){
+    STATE.view = 'courses';
+    document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.view==='courses'));
+  }
 }
 
 function bindNav(){
@@ -227,10 +245,11 @@ function bindNav(){
 
 function renderUserSelect(){
   const sel = document.getElementById('currentUserSelect');
-  sel.innerHTML = STATE.staff.map(s=>`<option value="${s.id}" ${s.id===STATE.currentUserId?'selected':''}>${escapeHtml(s.name)}</option>`).join('');
+  sel.innerHTML = STATE.staff.map(s=>`<option value="${s.id}" ${s.id===STATE.currentUserId?'selected':''}>${escapeHtml(s.name)}${s.role==='admin'?'(管理員)':''}</option>`).join('');
   sel.onchange = async ()=>{
     STATE.currentUserId = sel.value;
     await saveCurrentUser(STATE.currentUserId);
+    updateNavVisibility();
     render();
   };
 }
@@ -251,6 +270,7 @@ function courseCompletionPct(staffId, courseId){
 
 /* ---------- Render router ---------- */
 function render(){
+  if(!isAdmin() && ['dashboard','staff','reports'].includes(STATE.view)) STATE.view = 'courses';
   const main = document.getElementById('main');
   if(STATE.view==='dashboard') main.innerHTML = renderDashboard();
   else if(STATE.view==='courses') main.innerHTML = renderCourses();
@@ -586,7 +606,7 @@ function renderStaff(){
   <div id="addStaffFormWrap"></div>
   <div class="card">
     <table>
-      <thead><tr><th>姓名</th><th>部門/職稱</th><th>Email</th><th>整體完成率</th><th></th></tr></thead>
+      <thead><tr><th>姓名</th><th>部門/職稱</th><th>Email</th><th>身分</th><th>整體完成率</th><th></th></tr></thead>
       <tbody>
         ${STATE.staff.map(s=>{
           const total = STATE.courses.length;
@@ -597,8 +617,9 @@ function renderStaff(){
             <td>${escapeHtml(s.name)}</td>
             <td>${escapeHtml(s.dept||'-')}</td>
             <td>${escapeHtml(s.email||'-')}</td>
+            <td><span class="pill ${s.role==='admin'?'warn':'off'}">${s.role==='admin'?'管理員':'一般人員'}</span></td>
             <td><span class="pill ${pct>=100?'ok':(pct>0?'warn':'off')}">${pct}%</span></td>
-            <td><button class="icon-btn" onclick="deleteStaff('${s.id}')">刪除</button></td>
+            <td><button class="icon-btn" onclick="showEditStaffForm('${s.id}')">編輯</button> <button class="icon-btn" onclick="deleteStaff('${s.id}')">刪除</button></td>
           </tr>`;
         }).join('')}
       </tbody>
@@ -606,15 +627,25 @@ function renderStaff(){
   </div>
   `;
 }
+function staffFormHtml(s){
+  s = s || {name:'', dept:'', email:'', role:'staff'};
+  return `
+    <div class="form-row">
+      <input type="text" id="staffFormName" placeholder="姓名" value="${escapeHtml(s.name)}">
+      <input type="text" id="staffFormDept" placeholder="部門/職稱" value="${escapeHtml(s.dept)}">
+      <input type="email" id="staffFormEmail" placeholder="Email(選填)" value="${escapeHtml(s.email)}">
+      <select class="field" id="staffFormRole" style="max-width:140px;">
+        <option value="staff" ${s.role!=='admin'?'selected':''}>一般人員</option>
+        <option value="admin" ${s.role==='admin'?'selected':''}>管理員</option>
+      </select>
+    </div>
+  `;
+}
 function showAddStaffForm(){
   const wrap = document.getElementById('addStaffFormWrap');
   wrap.innerHTML = `
     <div class="card" style="margin-bottom:16px;">
-      <div class="form-row">
-        <input type="text" id="newStaffName" placeholder="姓名">
-        <input type="text" id="newStaffDept" placeholder="部門/職稱">
-        <input type="email" id="newStaffEmail" placeholder="Email(選填)">
-      </div>
+      ${staffFormHtml(null)}
       <div class="form-row">
         <button class="btn accent" onclick="submitNewStaff()">儲存</button>
         <button class="btn ghost" onclick="document.getElementById('addStaffFormWrap').innerHTML=''">取消</button>
@@ -622,15 +653,48 @@ function showAddStaffForm(){
     </div>
   `;
 }
+function showEditStaffForm(id){
+  const s = STATE.staff.find(x=>x.id===id);
+  if(!s) return;
+  const wrap = document.getElementById('addStaffFormWrap');
+  wrap.innerHTML = `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="section-title" style="margin-top:0;">編輯人員</div>
+      ${staffFormHtml(s)}
+      <div class="form-row">
+        <button class="btn accent" onclick="submitEditStaff('${id}')">儲存變更</button>
+        <button class="btn ghost" onclick="document.getElementById('addStaffFormWrap').innerHTML=''">取消</button>
+      </div>
+    </div>
+  `;
+}
+function readStaffForm(){
+  const name = document.getElementById('staffFormName').value.trim();
+  const dept = document.getElementById('staffFormDept').value.trim();
+  const email = document.getElementById('staffFormEmail').value.trim();
+  const role = document.getElementById('staffFormRole').value;
+  return {name, dept, email, role};
+}
 async function submitNewStaff(){
-  const name = document.getElementById('newStaffName').value.trim();
-  const dept = document.getElementById('newStaffDept').value.trim();
-  const email = document.getElementById('newStaffEmail').value.trim();
-  if(!name){ alert('請輸入姓名'); return; }
-  STATE.staff.push({id:uid(), name, dept, email});
+  const f = readStaffForm();
+  if(!f.name){ alert('請輸入姓名'); return; }
+  STATE.staff.push({id:uid(), name:f.name, dept:f.dept, email:f.email, role:f.role});
   await saveStaff(STATE.staff);
   document.getElementById('addStaffFormWrap').innerHTML='';
   renderUserSelect();
+  updateNavVisibility();
+  render();
+}
+async function submitEditStaff(id){
+  const f = readStaffForm();
+  if(!f.name){ alert('請輸入姓名'); return; }
+  const s = STATE.staff.find(x=>x.id===id);
+  if(!s) return;
+  s.name = f.name; s.dept = f.dept; s.email = f.email; s.role = f.role;
+  await saveStaff(STATE.staff);
+  document.getElementById('addStaffFormWrap').innerHTML='';
+  renderUserSelect();
+  updateNavVisibility();
   render();
 }
 async function deleteStaff(id){
@@ -642,6 +706,7 @@ async function deleteStaff(id){
   await saveProgress(STATE.progress);
   if(STATE.currentUserId===id){ STATE.currentUserId = STATE.staff[0].id; await saveCurrentUser(STATE.currentUserId); }
   renderUserSelect();
+  updateNavVisibility();
   render();
 }
 

@@ -99,10 +99,17 @@
     .grid4{grid-template-columns:repeat(2,1fr);}
     .two-col{grid-template-columns:1fr;}
   }
+  .login-gate{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:var(--bg);z-index:50;}
+  .login-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:36px 32px;width:320px;text-align:center;box-shadow:0 12px 32px rgba(60,50,40,0.10);}
+  .login-logo{width:48px;height:48px;border-radius:12px;background:var(--accent);color:#fff;font-weight:800;font-size:22px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;}
+  .login-card h2{margin:0 0 2px;font-size:18px;}
+  .login-label{display:block;text-align:left;font-size:12px;color:var(--sub);margin-bottom:6px;margin-top:14px;}
+  .login-error{color:#b06a54;font-size:12px;text-align:left;margin-top:10px;}
 </style>
 </head>
 <body>
-<div class="app">
+<div id="loginGate" class="login-gate"></div>
+<div class="app" style="display:none;">
   <div class="sidebar">
     <div class="brand">
       <div class="logo">欣</div>
@@ -119,7 +126,8 @@
     <div class="nav-item" data-view="reports" data-admin-only="1"><span class="ico">↗</span>學習報表</div>
     <div class="user-box">
       <label>目前身分</label>
-      <select id="currentUserSelect"></select>
+      <div id="currentUserDisplay" style="color:#fff;font-weight:600;margin-bottom:10px;font-size:14px;"></div>
+      <button class="btn ghost small" style="width:100%;" onclick="showLoginGate()">切換身分</button>
     </div>
   </div>
 
@@ -128,6 +136,7 @@
 
 <script src="https://www.youtube.com/iframe_api"></script>
 <script>
+
 /* ---------- Storage helpers ---------- */
 function storageGet(key, fallback){
   try{ const v = localStorage.getItem(key); return v!==null? JSON.parse(v): fallback; }
@@ -192,41 +201,21 @@ function ytId(url){
 /* ---------- App state ---------- */
 let STATE = { view:'dashboard', staff:[], courses:[], progress:{}, currentUserId:null, selectedCourseId:null, quizAnswers:{}, quizResult:null, player:null, adminPassword:'admin123', adminAuthed:false };
 
-async function promptAdminPassword(){
-  const pw = prompt('此身分為管理員,請輸入管理員密碼以繼續:');
-  if(pw === STATE.adminPassword) return true;
-  if(pw !== null) alert('密碼錯誤,將以一般人員權限顯示。');
-  return false;
-}
-
 async function initApp(){
-  document.getElementById('main').innerHTML = '<div class="empty" style="padding:80px 0;">資料載入中,請稍候...</div>';
   STATE.staff = await loadStaff();
   STATE.courses = await loadCourses();
   STATE.progress = await loadProgress();
   STATE.adminPassword = await loadAdminPassword();
-  STATE.currentUserId = await loadCurrentUser();
+  const lastUserId = await loadCurrentUser();
   if(STATE.staff.length===0){
     STATE.staff = [
       {id:uid(), name:'管理員', dept:'教育訓練管理員', email:'', role:'admin'},
     ];
     await saveStaff(STATE.staff);
   }
-  if(!STATE.currentUserId || !STATE.staff.find(s=>s.id===STATE.currentUserId)){
-    STATE.currentUserId = STATE.staff[0].id;
-    await saveCurrentUser(STATE.currentUserId);
-  }
-  const hasAnyAdmin = STATE.staff.some(s=>s.role==='admin');
-  const cu = STATE.staff.find(s=>s.id===STATE.currentUserId);
-  if(hasAnyAdmin && cu && cu.role==='admin'){
-    STATE.adminAuthed = await promptAdminPassword();
-  }
+  STATE.currentUserId = (lastUserId && STATE.staff.find(s=>s.id===lastUserId))? lastUserId : STATE.staff[0].id;
   if(STATE.courses.length>0) STATE.selectedCourseId = STATE.courses[0].id;
-  if(!isAdmin() && ['dashboard','staff','reports'].includes(STATE.view)) STATE.view = 'courses';
-  bindNav();
-  renderUserSelect();
-  updateNavVisibility();
-  render();
+  showLoginGate();
 }
 
 function isAdmin(){
@@ -261,39 +250,95 @@ function bindNav(){
   });
 }
 
-async function verifyIdentitySwitch(staffObj){
+/* ---------- Login gate ---------- */
+function showLoginGate(){
+  document.getElementById('loginGate').style.display = 'flex';
+  document.querySelector('.app').style.display = 'none';
+  renderLoginGateContent();
+}
+function hideLoginGate(){
+  document.getElementById('loginGate').style.display = 'none';
+  document.querySelector('.app').style.display = 'flex';
+}
+
+function renderLoginGateContent(){
+  const gate = document.getElementById('loginGate');
+  gate.innerHTML = `
+    <div class="login-card">
+      <div class="login-logo">欣</div>
+      <h2>欣莘醫美集團</h2>
+      <div class="muted">內部教育訓練系統</div>
+      <label class="login-label">請選擇登入身份</label>
+      <select id="loginUserSelect" class="field" style="width:100%;">
+        ${STATE.staff.map(s=>`<option value="${s.id}" ${s.id===STATE.currentUserId?'selected':''}>${escapeHtml(s.name)}${s.role==='admin'?'(管理員)':''}</option>`).join('')}
+      </select>
+      <div id="loginEmailWrap"></div>
+      <div id="loginPasswordWrap"></div>
+      <div id="loginError" class="login-error" style="display:none;"></div>
+      <button class="btn accent" style="width:100%;margin-top:16px;" onclick="attemptLogin()">登入</button>
+    </div>
+  `;
+  document.getElementById('loginUserSelect').onchange = updateLoginFieldsVisibility;
+  updateLoginFieldsVisibility();
+}
+
+function updateLoginFieldsVisibility(){
+  const sel = document.getElementById('loginUserSelect');
+  const staffObj = STATE.staff.find(s=>s.id===sel.value);
+  const emailWrap = document.getElementById('loginEmailWrap');
+  const pwWrap = document.getElementById('loginPasswordWrap');
+  emailWrap.innerHTML = (staffObj && staffObj.email)
+    ? `<label class="login-label">請輸入您的Email以驗證身分</label><input type="email" id="loginEmailInput" class="field" style="width:100%;" placeholder="您的Email">`
+    : '';
+  const hasAnyAdmin = STATE.staff.some(s=>s.role==='admin');
+  pwWrap.innerHTML = (hasAnyAdmin && staffObj && staffObj.role==='admin')
+    ? `<label class="login-label">請輸入管理員密碼</label><input type="password" id="loginPasswordInput" class="field" style="width:100%;" placeholder="管理員密碼">`
+    : '';
+  document.getElementById('loginError').style.display = 'none';
+}
+
+async function attemptLogin(){
+  const sel = document.getElementById('loginUserSelect');
+  const staffObj = STATE.staff.find(s=>s.id===sel.value);
+  const errEl = document.getElementById('loginError');
+  if(!staffObj) return;
   if(staffObj.email){
-    const input = prompt('請輸入「'+staffObj.name+'」的Email以確認身分:');
-    if(input===null) return false;
-    if(input.trim().toLowerCase() !== staffObj.email.trim().toLowerCase()){
-      alert('Email不正確,無法切換身分。');
-      return false;
+    const emailInput = document.getElementById('loginEmailInput');
+    const val = emailInput? emailInput.value.trim().toLowerCase() : '';
+    if(val !== staffObj.email.trim().toLowerCase()){
+      errEl.textContent = 'Email不正確,請重新輸入。';
+      errEl.style.display = '';
+      return;
     }
   }
   const hasAnyAdmin = STATE.staff.some(s=>s.role==='admin');
   if(hasAnyAdmin && staffObj.role==='admin'){
-    return await promptAdminPassword();
-  }
-  return true;
-}
-
-function renderUserSelect(){
-  const sel = document.getElementById('currentUserSelect');
-  sel.innerHTML = STATE.staff.map(s=>`<option value="${s.id}" ${s.id===STATE.currentUserId?'selected':''}>${escapeHtml(s.name)}${s.role==='admin'?'(管理員)':''}</option>`).join('');
-  sel.onchange = async ()=>{
-    const newId = sel.value;
-    const newStaff = STATE.staff.find(s=>s.id===newId);
-    const ok = await verifyIdentitySwitch(newStaff);
-    if(!ok){
-      sel.value = STATE.currentUserId;
+    const pwInput = document.getElementById('loginPasswordInput');
+    const pwVal = pwInput? pwInput.value : '';
+    if(pwVal !== STATE.adminPassword){
+      errEl.textContent = '管理員密碼不正確。';
+      errEl.style.display = '';
       return;
     }
-    STATE.currentUserId = newId;
-    await saveCurrentUser(STATE.currentUserId);
-    STATE.adminAuthed = (newStaff.role==='admin');
-    updateNavVisibility();
-    render();
-  };
+  }
+  STATE.currentUserId = staffObj.id;
+  await saveCurrentUser(STATE.currentUserId);
+  STATE.adminAuthed = (staffObj.role==='admin');
+  STATE.quizResult = null;
+  STATE.quizAnswers = {};
+  if(!isAdmin() && ['dashboard','staff','reports'].includes(STATE.view)) STATE.view = 'courses';
+  hideLoginGate();
+  bindNav();
+  renderCurrentUserDisplay();
+  updateNavVisibility();
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.view===STATE.view));
+  render();
+}
+
+function renderCurrentUserDisplay(){
+  const el = document.getElementById('currentUserDisplay');
+  const u = currentUser();
+  if(el) el.textContent = u? (u.name + (u.role==='admin'?'(管理員)':'')) : '';
 }
 
 function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -833,7 +878,7 @@ async function submitNewStaff(){
   STATE.staff.push({id:uid(), name:f.name, dept:f.dept, email:f.email, role:f.role});
   await saveStaff(STATE.staff);
   document.getElementById('addStaffFormWrap').innerHTML='';
-  renderUserSelect();
+  renderCurrentUserDisplay();
   updateNavVisibility();
   render();
 }
@@ -845,7 +890,7 @@ async function submitEditStaff(id){
   s.name = f.name; s.dept = f.dept; s.email = f.email; s.role = f.role;
   await saveStaff(STATE.staff);
   document.getElementById('addStaffFormWrap').innerHTML='';
-  renderUserSelect();
+  renderCurrentUserDisplay();
   updateNavVisibility();
   render();
 }
@@ -870,7 +915,7 @@ async function deleteStaff(id){
   await saveStaff(STATE.staff);
   await saveProgress(STATE.progress);
   if(STATE.currentUserId===id){ STATE.currentUserId = STATE.staff[0].id; await saveCurrentUser(STATE.currentUserId); }
-  renderUserSelect();
+  renderCurrentUserDisplay();
   updateNavVisibility();
   render();
 }

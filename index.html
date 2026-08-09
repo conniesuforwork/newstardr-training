@@ -300,6 +300,10 @@ function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':
 
 function currentUser(){ return STATE.staff.find(s=>s.id===STATE.currentUserId) || STATE.staff[0]; }
 function userProgress(staffId){ return STATE.progress[staffId] || {}; }
+function coursesForStaff(staffObj){
+  if(!staffObj) return STATE.courses;
+  return STATE.courses.filter(c=> !c.targetDepts || c.targetDepts.length===0 || c.targetDepts.includes(staffObj.dept));
+}
 
 function courseCompletionPct(staffId, courseId){
   const p = userProgress(staffId)[courseId];
@@ -328,7 +332,7 @@ function renderDashboard(){
   const totalCourses = STATE.courses.length;
   let totalAssignments=0, totalCompleted=0, pendingQuiz=0;
   STATE.staff.forEach(s=>{
-    STATE.courses.forEach(c=>{
+    coursesForStaff(s).forEach(c=>{
       totalAssignments++;
       const p = userProgress(s.id)[c.id];
       if(p && p.watched && p.quizPassed) totalCompleted++;
@@ -337,6 +341,7 @@ function renderDashboard(){
   });
   const rate = totalAssignments? Math.round(totalCompleted/totalAssignments*100):0;
   const u = currentUser();
+  const myCourses = coursesForStaff(u);
 
   return `
   <div class="topbar">
@@ -356,8 +361,8 @@ function renderDashboard(){
 
   <div class="section-title">我的課程進度</div>
   <div class="card">
-    ${STATE.courses.length===0? '<div class="empty">尚未建立任何課程,前往「課程與影片」新增。</div>' :
-      STATE.courses.map(c=>{
+    ${myCourses.length===0? '<div class="empty">目前沒有指派給您的課程。</div>' :
+      myCourses.map(c=>{
         const pct = courseCompletionPct(u.id, c.id);
         return `<div class="bar-row"><div class="name">${escapeHtml(c.title)}</div><div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div><div class="pct">${pct}%</div></div>`;
       }).join('')}
@@ -372,14 +377,16 @@ function goView(v){
 
 /* ---------- Courses ---------- */
 function renderCourses(){
-  const selected = STATE.courses.find(c=>c.id===STATE.selectedCourseId) || STATE.courses[0];
+  const admin = isAdmin();
+  const visibleCourses = admin? STATE.courses : coursesForStaff(currentUser());
+  const selected = visibleCourses.find(c=>c.id===STATE.selectedCourseId) || visibleCourses[0];
   const u = currentUser();
   const prog = selected? userProgress(u.id)[selected.id] : null;
 
   return `
   <div class="topbar">
     <h1>課程與影片</h1>
-    <button class="btn accent" onclick="showAddCourseForm()">+ 新增課程</button>
+    ${admin? '<button class="btn accent" onclick="showAddCourseForm()">+ 新增課程</button>' : ''}
   </div>
   <div id="addCourseFormWrap"></div>
   <div class="two-col">
@@ -391,6 +398,7 @@ function renderCourses(){
             <div>
               <h3 style="margin:0 0 6px;">${escapeHtml(selected.title)}</h3>
               <p class="muted" style="max-width:520px;">${escapeHtml(selected.desc||'')}</p>
+              ${selected.targetDepts && selected.targetDepts.length? `<p class="muted" style="margin-top:6px;">適用部門:${selected.targetDepts.map(escapeHtml).join('、')}</p>` : ''}
             </div>
             <div>
               ${prog && prog.watched? '<span class="pill ok">已觀看</span>' : '<span class="pill off">尚未觀看</span>'}
@@ -405,17 +413,18 @@ function renderCourses(){
           ` : ''}
           <div class="muted" style="margin-top:10px;">累計觀看時間:${Math.floor((prog?.watchSeconds||0)/60)} 分 ${Math.floor((prog?.watchSeconds||0)%60)} 秒</div>
           ${selected.quiz && selected.quiz.length? `<button class="btn ghost small" style="margin-top:10px;" onclick="goToQuiz('${selected.id}')">前往測驗 →</button>`:''}
+          ${admin? `
           <div style="margin-top:10px;">
             <button class="btn ghost small" onclick="showEditCourseForm('${selected.id}')">編輯課程</button>
             <button class="icon-btn" style="margin-left:10px;" onclick="deleteCourse('${selected.id}')">刪除此課程</button>
-          </div>
+          </div>` : ''}
         </div>
-      ` : '<div class="card empty">尚未選擇課程,請先新增或於右側選擇。</div>'}
+      ` : `<div class="card empty">${admin? '尚未選擇課程,請先新增或於右側選擇。' : '目前沒有指派給您的課程。'}</div>`}
     </div>
     <div class="card">
       <div class="section-title" style="margin-top:0;">課程清單</div>
       <div class="course-list">
-        ${STATE.courses.map(c=>{
+        ${visibleCourses.map(c=>{
           const p = userProgress(u.id)[c.id];
           return `<div class="course-item ${c.id===STATE.selectedCourseId?'selected':''}" onclick="selectCourse('${c.id}')">
             <div><h4>${escapeHtml(c.title)}</h4><p>${p&&p.watched?'已觀看':'未觀看'} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''}</p></div>
@@ -432,12 +441,18 @@ function selectCourse(id){ STATE.selectedCourseId=id; render(); }
 
 function courseFormInnerHtml(c){
   c = c || {title:'', desc:'', videoUrl:''};
+  const depts = [...new Set(STATE.staff.map(s=>s.dept).filter(Boolean))];
+  const targetDepts = c.targetDepts || [];
   return `
     <div class="form-row">
       <input type="text" id="courseFormTitle" placeholder="課程名稱" value="${escapeHtml(c.title)}">
       <input type="text" id="courseFormVideo" placeholder="YouTube 影片連結(建議設為不公開)" value="${escapeHtml(c.videoUrl||'')}">
     </div>
     <textarea id="courseFormDesc" placeholder="課程說明(選填)">${escapeHtml(c.desc||'')}</textarea>
+    <div class="muted" style="margin:8px 0;">適用部門(不勾選 = 全部人員都需要上這堂課)</div>
+    <div id="deptChecklist" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;">
+      ${depts.length? depts.map(d=>`<label style="display:flex;align-items:center;gap:5px;font-size:13px;border:1px solid var(--border);padding:6px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" class="deptCheck" value="${escapeHtml(d)}" ${targetDepts.includes(d)?'checked':''}> ${escapeHtml(d)}</label>`).join('') : '<span class="muted">尚無部門資料,請先在「人員管理」為同仁填寫部門/職稱</span>'}
+    </div>
     <div class="muted" style="margin:8px 0;">課程講義(PDF連結,可新增多份)</div>
     <div id="materialBuilder"></div>
     <div class="form-row" style="margin-top:4px;margin-bottom:14px;">
@@ -522,6 +537,7 @@ function readCourseForm(){
   const title = document.getElementById('courseFormTitle').value.trim();
   const video = document.getElementById('courseFormVideo').value.trim();
   const desc = document.getElementById('courseFormDesc').value.trim();
+  const targetDepts = Array.from(document.querySelectorAll('.deptCheck:checked')).map(el=>el.value);
   const qRows = document.querySelectorAll('#qBuilder .quiz-q');
   const quiz = [];
   qRows.forEach(row=>{
@@ -537,13 +553,13 @@ function readCourseForm(){
     const url = row.querySelector('.materialUrl').value.trim();
     if(url) materials.push({name: name || '講義', url});
   });
-  return {title, video, desc, quiz, materials};
+  return {title, video, desc, quiz, materials, targetDepts};
 }
 
 async function submitNewCourse(){
   const f = readCourseForm();
   if(!f.title || !ytId(f.video)){ alert('請填寫課程名稱與有效的 YouTube 連結'); return; }
-  const course = {id:uid(), title:f.title, desc:f.desc, videoUrl:f.video, quiz:f.quiz, materials:f.materials};
+  const course = {id:uid(), title:f.title, desc:f.desc, videoUrl:f.video, quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts};
   STATE.courses.push(course);
   await saveCourses(STATE.courses);
   STATE.selectedCourseId = course.id;
@@ -556,7 +572,7 @@ async function submitEditCourse(id){
   if(!f.title || !ytId(f.video)){ alert('請填寫課程名稱與有效的 YouTube 連結'); return; }
   const c = STATE.courses.find(x=>x.id===id);
   if(!c) return;
-  c.title = f.title; c.desc = f.desc; c.videoUrl = f.video; c.quiz = f.quiz; c.materials = f.materials;
+  c.title = f.title; c.desc = f.desc; c.videoUrl = f.video; c.quiz = f.quiz; c.materials = f.materials; c.targetDepts = f.targetDepts;
   await saveCourses(STATE.courses);
   document.getElementById('addCourseFormWrap').innerHTML='';
   render();
@@ -652,7 +668,8 @@ function goToCourseEdit(courseId){
 /* ---------- Quiz ---------- */
 function renderQuiz(){
   const u = currentUser();
-  const withQuiz = STATE.courses.filter(c=>c.quiz && c.quiz.length);
+  const scopedCourses = isAdmin()? STATE.courses : coursesForStaff(u);
+  const withQuiz = scopedCourses.filter(c=>c.quiz && c.quiz.length);
   const selected = withQuiz.find(c=>c.id===STATE.selectedCourseId) || withQuiz[0];
 
   return `
@@ -742,9 +759,10 @@ function renderStaff(){
       <thead><tr><th>姓名</th><th>部門/職稱</th><th>Email</th><th>身分</th><th>整體完成率</th><th></th></tr></thead>
       <tbody>
         ${STATE.staff.map(s=>{
-          const total = STATE.courses.length;
+          const myCourses = coursesForStaff(s);
+          const total = myCourses.length;
           let done=0;
-          STATE.courses.forEach(c=>{ const p=userProgress(s.id)[c.id]; if(p&&p.watched&&p.quizPassed) done++; });
+          myCourses.forEach(c=>{ const p=userProgress(s.id)[c.id]; if(p&&p.watched&&p.quizPassed) done++; });
           const pct = total? Math.round(done/total*100):0;
           return `<tr>
             <td>${escapeHtml(s.name)}</td>
@@ -865,9 +883,10 @@ function renderReports(){
     <div class="card">
       <div class="section-title" style="margin-top:0;">各人員完成率</div>
       ${STATE.staff.map(s=>{
-        const total = STATE.courses.length;
+        const myCourses = coursesForStaff(s);
+        const total = myCourses.length;
         let done=0;
-        STATE.courses.forEach(c=>{ const p=userProgress(s.id)[c.id]; if(p&&p.watched&&p.quizPassed) done++; });
+        myCourses.forEach(c=>{ const p=userProgress(s.id)[c.id]; if(p&&p.watched&&p.quizPassed) done++; });
         const pct = total? Math.round(done/total*100):0;
         return `<div class="bar-row"><div class="name">${escapeHtml(s.name)}</div><div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div><div class="pct">${pct}%</div></div>`;
       }).join('') || '<div class="empty">尚無人員資料</div>'}

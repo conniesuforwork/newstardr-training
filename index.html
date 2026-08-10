@@ -147,7 +147,7 @@ function storageSet(key, value){
   catch(e){ console.error('儲存失敗', e); }
 }
 
-/* Shared backend: Google Apps Script + Google Sheet (JSONP — sidesteps Apps Script's inconsistent CORS headers) */
+/* Shared backend: Google Apps Script + Google Sheet */
 const API_URL = 'https://script.google.com/macros/s/AKfycbzECIWlnmrXBzrZUNwLVyxF7geQMGJK-QddoeWCzd5WtEDMdixD3sKhKKKYT2owa5LJcQ/exec';
 let __jsonpCounter = 0;
 function jsonpRequest(params){
@@ -163,12 +163,23 @@ function jsonpRequest(params){
     document.body.appendChild(script);
   });
 }
+function xhrPost(url, data){
+  return new Promise((resolve, reject)=>{
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url, true);
+    const timer = setTimeout(()=>{ xhr.abort(); reject(new Error('timeout')); }, 20000);
+    xhr.onload = ()=>{ clearTimeout(timer); resolve(xhr.responseText); };
+    xhr.onerror = ()=>{ clearTimeout(timer); reject(new Error('network error')); };
+    xhr.send(JSON.stringify(data));
+  });
+}
 async function apiGet(key){
   const val = await jsonpRequest({ key: key });
   return val; // null is a legitimate "key not found" result
 }
 async function apiSet(key, value){
-  await jsonpRequest({ action:'set', key: key, value: JSON.stringify(value) });
+  // POST body has no practical size limit, unlike a GET query string — safe for large courses/quizzes
+  await xhrPost(API_URL, { key: key, value: JSON.stringify(value) });
 }
 
 async function loadStaff(){ const v = await apiGet('lms-staff'); return v===null? [] : v; }
@@ -1016,4 +1027,3 @@ initApp();
 </script>
 </body>
 </html>
-

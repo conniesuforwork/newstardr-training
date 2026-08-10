@@ -163,27 +163,23 @@ function jsonpRequest(params){
     document.body.appendChild(script);
   });
 }
-async function apiGet(key, fallback){
-  try{
-    const val = await jsonpRequest({ key: key });
-    return (val===null || val===undefined) ? fallback : val;
-  }catch(e){ console.error('讀取資料庫失敗', e); return fallback; }
+async function apiGet(key){
+  const val = await jsonpRequest({ key: key });
+  return val; // null is a legitimate "key not found" result
 }
 async function apiSet(key, value){
-  try{
-    await jsonpRequest({ action:'set', key: key, value: JSON.stringify(value) });
-  }catch(e){ console.error('寫入資料庫失敗', e); }
+  await jsonpRequest({ action:'set', key: key, value: JSON.stringify(value) });
 }
 
-async function loadStaff(){ return apiGet('lms-staff', []); }
+async function loadStaff(){ const v = await apiGet('lms-staff'); return v===null? [] : v; }
 async function saveStaff(list){ await apiSet('lms-staff', list); }
-async function loadCourses(){ return apiGet('lms-courses', []); }
+async function loadCourses(){ const v = await apiGet('lms-courses'); return v===null? [] : v; }
 async function saveCourses(list){ await apiSet('lms-courses', list); }
-async function loadProgress(){ return apiGet('lms-progress', {}); }
+async function loadProgress(){ const v = await apiGet('lms-progress'); return v===null? {} : v; }
 async function saveProgress(obj){ await apiSet('lms-progress', obj); }
 async function loadCurrentUser(){ return storageGet('lms-current-user', null); }
 async function saveCurrentUser(id){ storageSet('lms-current-user', id); }
-async function loadAdminPassword(){ return apiGet('lms-admin-password', 'admin123'); }
+async function loadAdminPassword(){ const v = await apiGet('lms-admin-password'); return v===null? 'admin123' : v; }
 async function saveAdminPassword(pw){ await apiSet('lms-admin-password', pw); }
 
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
@@ -202,10 +198,17 @@ function ytId(url){
 let STATE = { view:'dashboard', staff:[], courses:[], progress:{}, currentUserId:null, selectedCourseId:null, quizAnswers:{}, quizResult:null, player:null, adminPassword:'admin123', adminAuthed:false };
 
 async function initApp(){
-  STATE.staff = await loadStaff();
-  STATE.courses = await loadCourses();
-  STATE.progress = await loadProgress();
-  STATE.adminPassword = await loadAdminPassword();
+  showLoadingGate();
+  try{
+    STATE.staff = await loadStaff();
+    STATE.courses = await loadCourses();
+    STATE.progress = await loadProgress();
+    STATE.adminPassword = await loadAdminPassword();
+  }catch(e){
+    console.error('資料載入失敗', e);
+    showLoadErrorGate();
+    return;
+  }
   const lastUserId = await loadCurrentUser();
   if(STATE.staff.length===0){
     STATE.staff = [
@@ -216,6 +219,27 @@ async function initApp(){
   STATE.currentUserId = (lastUserId && STATE.staff.find(s=>s.id===lastUserId))? lastUserId : STATE.staff[0].id;
   if(STATE.courses.length>0) STATE.selectedCourseId = STATE.courses[0].id;
   showLoginGate();
+}
+
+function showLoadingGate(){
+  const gate = document.getElementById('loginGate');
+  gate.style.display = 'flex';
+  document.querySelector('.app').style.display = 'none';
+  gate.innerHTML = `<div class="login-card"><div class="login-logo">欣</div><h2>載入中</h2><div class="muted">正在連線資料庫,請稍候...</div></div>`;
+}
+
+function showLoadErrorGate(){
+  const gate = document.getElementById('loginGate');
+  gate.style.display = 'flex';
+  document.querySelector('.app').style.display = 'none';
+  gate.innerHTML = `
+    <div class="login-card">
+      <div class="login-logo">欣</div>
+      <h2>連線失敗</h2>
+      <div class="muted">無法連線到資料庫,可能是網路不穩定或Google服務暫時延遲。請確認網路連線後重新整理頁面,您的資料不會受影響。</div>
+      <button class="btn accent" style="width:100%;margin-top:16px;" onclick="location.reload()">重新整理</button>
+    </div>
+  `;
 }
 
 function isAdmin(){
@@ -605,7 +629,10 @@ async function submitNewCourse(){
   const f = readCourseForm();
   if(!f.title || !ytId(f.video)){ alert('請填寫課程名稱與有效的 YouTube 連結'); return; }
   const course = {id:uid(), title:f.title, desc:f.desc, videoUrl:f.video, quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts};
-  STATE.courses.push(course);
+  let latest;
+  try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); return; }
+  latest.push(course);
+  STATE.courses = latest;
   await saveCourses(STATE.courses);
   STATE.selectedCourseId = course.id;
   document.getElementById('addCourseFormWrap').innerHTML='';
@@ -615,9 +642,12 @@ async function submitNewCourse(){
 async function submitEditCourse(id){
   const f = readCourseForm();
   if(!f.title || !ytId(f.video)){ alert('請填寫課程名稱與有效的 YouTube 連結'); return; }
-  const c = STATE.courses.find(x=>x.id===id);
-  if(!c) return;
+  let latest;
+  try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); return; }
+  const c = latest.find(x=>x.id===id);
+  if(!c){ alert('找不到這堂課程,可能已被其他人刪除,請重新整理頁面。'); return; }
   c.title = f.title; c.desc = f.desc; c.videoUrl = f.video; c.quiz = f.quiz; c.materials = f.materials; c.targetDepts = f.targetDepts;
+  STATE.courses = latest;
   await saveCourses(STATE.courses);
   document.getElementById('addCourseFormWrap').innerHTML='';
   render();
@@ -625,7 +655,9 @@ async function submitEditCourse(id){
 
 async function deleteCourse(id){
   if(!confirm('確定要刪除此課程?')) return;
-  STATE.courses = STATE.courses.filter(c=>c.id!==id);
+  let latest;
+  try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); return; }
+  STATE.courses = latest.filter(c=>c.id!==id);
   await saveCourses(STATE.courses);
   STATE.selectedCourseId = STATE.courses[0]?.id || null;
   render();
@@ -660,37 +692,30 @@ async function onPlayerStateChange(e){
   if(e.data === YT.PlayerState.PLAYING){
     clearInterval(watchTimer);
     watchTimer = setInterval(async ()=>{
-      await addWatchSeconds(2);
-    }, 2000);
+      await addWatchSeconds(10);
+    }, 10000);
   } else {
     clearInterval(watchTimer);
     if(e.data === YT.PlayerState.ENDED){
-      await markWatched();
+      await addWatchSeconds(0, true);
     }
   }
 }
-async function addWatchSeconds(sec){
+async function addWatchSeconds(sec, forceWatched){
   const u = currentUser();
   const cid = STATE.selectedCourseId;
   if(!u || !cid) return;
-  if(!STATE.progress[u.id]) STATE.progress[u.id] = {};
-  if(!STATE.progress[u.id][cid]) STATE.progress[u.id][cid] = {watchSeconds:0, watched:false, quizPassed:false};
-  STATE.progress[u.id][cid].watchSeconds = (STATE.progress[u.id][cid].watchSeconds||0) + sec;
-  const course = STATE.courses.find(c=>c.id===cid);
-  if(course && STATE.progress[u.id][cid].watchSeconds >= 20) STATE.progress[u.id][cid].watched = true;
+  let latest;
+  try{ latest = await loadProgress(); }
+  catch(e){ console.error('進度同步失敗,將於下次儲存時補上', e); return; }
+  if(!latest[u.id]) latest[u.id] = {};
+  if(!latest[u.id][cid]) latest[u.id][cid] = {watchSeconds:0, watched:false, quizPassed:false};
+  latest[u.id][cid].watchSeconds = (latest[u.id][cid].watchSeconds||0) + sec;
+  if(latest[u.id][cid].watchSeconds >= 20 || forceWatched) latest[u.id][cid].watched = true;
+  STATE.progress = latest;
   await saveProgress(STATE.progress);
   const label = document.querySelector('.two-col .muted');
   if(label) render();
-}
-async function markWatched(){
-  const u = currentUser();
-  const cid = STATE.selectedCourseId;
-  if(!u || !cid) return;
-  if(!STATE.progress[u.id]) STATE.progress[u.id] = {};
-  if(!STATE.progress[u.id][cid]) STATE.progress[u.id][cid] = {watchSeconds:0, watched:false, quizPassed:false};
-  STATE.progress[u.id][cid].watched = true;
-  await saveProgress(STATE.progress);
-  render();
 }
 
 function goToQuiz(courseId){
@@ -779,10 +804,13 @@ async function submitQuiz(courseId){
   const total = course.quiz.length;
   const score = Math.round(correct/total*100);
   const passed = score >= 70;
-  if(!STATE.progress[u.id]) STATE.progress[u.id] = {};
-  if(!STATE.progress[u.id][courseId]) STATE.progress[u.id][courseId] = {watchSeconds:0, watched:false, quizPassed:false};
-  STATE.progress[u.id][courseId].quizScore = score;
-  STATE.progress[u.id][courseId].quizPassed = passed;
+  let latest;
+  try{ latest = await loadProgress(); }catch(e){ alert('無法連線到資料庫,測驗結果尚未儲存,請確認網路連線後重新送出。'); return; }
+  if(!latest[u.id]) latest[u.id] = {};
+  if(!latest[u.id][courseId]) latest[u.id][courseId] = {watchSeconds:0, watched:false, quizPassed:false};
+  latest[u.id][courseId].quizScore = score;
+  latest[u.id][courseId].quizPassed = passed;
+  STATE.progress = latest;
   await saveProgress(STATE.progress);
   STATE.quizResult = {courseId, correct, total, score, passed};
   render();
@@ -875,7 +903,10 @@ async function submitNewStaff(){
   const f = readStaffForm();
   if(!f.name){ alert('請輸入姓名'); return; }
   if(!f.email){ if(!confirm('未填寫Email的話,任何人都能不驗證身分就切換成這個人,確定要不填嗎?')) return; }
-  STATE.staff.push({id:uid(), name:f.name, dept:f.dept, email:f.email, role:f.role});
+  let latest;
+  try{ latest = await loadStaff(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); return; }
+  latest.push({id:uid(), name:f.name, dept:f.dept, email:f.email, role:f.role});
+  STATE.staff = latest;
   await saveStaff(STATE.staff);
   document.getElementById('addStaffFormWrap').innerHTML='';
   renderCurrentUserDisplay();
@@ -885,9 +916,12 @@ async function submitNewStaff(){
 async function submitEditStaff(id){
   const f = readStaffForm();
   if(!f.name){ alert('請輸入姓名'); return; }
-  const s = STATE.staff.find(x=>x.id===id);
-  if(!s) return;
+  let latest;
+  try{ latest = await loadStaff(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); return; }
+  const s = latest.find(x=>x.id===id);
+  if(!s){ alert('找不到這位人員,可能已被其他人刪除,請重新整理頁面。'); return; }
   s.name = f.name; s.dept = f.dept; s.email = f.email; s.role = f.role;
+  STATE.staff = latest;
   await saveStaff(STATE.staff);
   document.getElementById('addStaffFormWrap').innerHTML='';
   renderCurrentUserDisplay();
@@ -910,8 +944,11 @@ async function changeAdminPassword(){
 async function deleteStaff(id){
   if(STATE.staff.length<=1){ alert('至少需保留一位人員'); return; }
   if(!confirm('確定刪除此人員?學習紀錄將一併移除。')) return;
-  STATE.staff = STATE.staff.filter(s=>s.id!==id);
-  delete STATE.progress[id];
+  let latest, latestProgress;
+  try{ latest = await loadStaff(); latestProgress = await loadProgress(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); return; }
+  STATE.staff = latest.filter(s=>s.id!==id);
+  delete latestProgress[id];
+  STATE.progress = latestProgress;
   await saveStaff(STATE.staff);
   await saveProgress(STATE.progress);
   if(STATE.currentUserId===id){ STATE.currentUserId = STATE.staff[0].id; await saveCurrentUser(STATE.currentUserId); }

@@ -485,7 +485,7 @@ function renderCourses(){
           ${admin? `
           <div style="margin-top:10px;">
             <button class="btn ghost small" onclick="showEditCourseForm('${selected.id}')">編輯課程</button>
-            <button class="icon-btn" style="margin-left:10px;" onclick="deleteCourse('${selected.id}')">刪除此課程</button>
+            <button class="icon-btn" style="margin-left:10px;" onclick="deleteCourse(this,'${selected.id}')">刪除此課程</button>
           </div>` : ''}
         </div>
       ` : `<div class="card empty">${admin? '尚未選擇課程,請先新增或於右側選擇。' : '目前沒有指派給您的課程。'}</div>`}
@@ -542,7 +542,7 @@ function showAddCourseForm(){
       <div class="section-title" style="margin-top:0;">新增課程</div>
       ${courseFormInnerHtml(null)}
       <div class="form-row" style="margin-top:10px;">
-        <button class="btn accent" onclick="submitNewCourse()">儲存課程</button>
+        <button class="btn accent" onclick="submitNewCourse(this)">儲存課程</button>
         <button class="btn ghost" onclick="document.getElementById('addCourseFormWrap').innerHTML=''">取消</button>
       </div>
     </div>
@@ -559,7 +559,7 @@ function showEditCourseForm(id){
       <div class="section-title" style="margin-top:0;">編輯課程</div>
       ${courseFormInnerHtml(c)}
       <div class="form-row" style="margin-top:10px;">
-        <button class="btn accent" onclick="submitEditCourse('${id}')">儲存變更</button>
+        <button class="btn accent" onclick="submitEditCourse(this,'${id}')">儲存變更</button>
         <button class="btn ghost" onclick="document.getElementById('addCourseFormWrap').innerHTML=''">取消</button>
       </div>
     </div>
@@ -625,12 +625,21 @@ function readCourseForm(){
   return {title, video, desc, quiz, materials, targetDepts};
 }
 
-async function submitNewCourse(){
+function lockBtn(btn, loadingLabel){
+  if(!btn) return ()=>{};
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = loadingLabel;
+  return ()=>{ btn.disabled=false; btn.textContent=original; };
+}
+
+async function submitNewCourse(btn){
   const f = readCourseForm();
   if(!f.title || !ytId(f.video)){ alert('請填寫課程名稱與有效的 YouTube 連結'); return; }
+  const restore = lockBtn(btn, '儲存中...');
   const course = {id:uid(), title:f.title, desc:f.desc, videoUrl:f.video, quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts};
   let latest;
-  try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); return; }
+  try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   latest.push(course);
   STATE.courses = latest;
   await saveCourses(STATE.courses);
@@ -639,13 +648,14 @@ async function submitNewCourse(){
   render();
 }
 
-async function submitEditCourse(id){
+async function submitEditCourse(btn, id){
   const f = readCourseForm();
   if(!f.title || !ytId(f.video)){ alert('請填寫課程名稱與有效的 YouTube 連結'); return; }
+  const restore = lockBtn(btn, '儲存中...');
   let latest;
-  try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); return; }
+  try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   const c = latest.find(x=>x.id===id);
-  if(!c){ alert('找不到這堂課程,可能已被其他人刪除,請重新整理頁面。'); return; }
+  if(!c){ alert('找不到這堂課程,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
   c.title = f.title; c.desc = f.desc; c.videoUrl = f.video; c.quiz = f.quiz; c.materials = f.materials; c.targetDepts = f.targetDepts;
   STATE.courses = latest;
   await saveCourses(STATE.courses);
@@ -653,10 +663,11 @@ async function submitEditCourse(id){
   render();
 }
 
-async function deleteCourse(id){
+async function deleteCourse(btn, id){
   if(!confirm('確定要刪除此課程?')) return;
+  const restore = lockBtn(btn, '刪除中...');
   let latest;
-  try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); return; }
+  try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   STATE.courses = latest.filter(c=>c.id!==id);
   await saveCourses(STATE.courses);
   STATE.selectedCourseId = STATE.courses[0]?.id || null;
@@ -791,12 +802,12 @@ function renderQuizBody(course, u){
         `).join('')}
       </div>
     `).join('')}
-    <button class="btn accent" onclick="submitQuiz('${course.id}')">送出答案</button>
+    <button class="btn accent" onclick="submitQuiz(this,'${course.id}')">送出答案</button>
   </div>
   `;
 }
 
-async function submitQuiz(courseId){
+async function submitQuiz(btn, courseId){
   const course = STATE.courses.find(c=>c.id===courseId);
   const u = currentUser();
   let correct = 0;
@@ -804,8 +815,9 @@ async function submitQuiz(courseId){
   const total = course.quiz.length;
   const score = Math.round(correct/total*100);
   const passed = score >= 70;
+  const restore = lockBtn(btn, '送出中...');
   let latest;
-  try{ latest = await loadProgress(); }catch(e){ alert('無法連線到資料庫,測驗結果尚未儲存,請確認網路連線後重新送出。'); return; }
+  try{ latest = await loadProgress(); }catch(e){ alert('無法連線到資料庫,測驗結果尚未儲存,請確認網路連線後重新送出。'); restore(); return; }
   if(!latest[u.id]) latest[u.id] = {};
   if(!latest[u.id][courseId]) latest[u.id][courseId] = {watchSeconds:0, watched:false, quizPassed:false};
   latest[u.id][courseId].quizScore = score;
@@ -843,7 +855,7 @@ function renderStaff(){
             <td>${escapeHtml(s.email||'-')}</td>
             <td><span class="pill ${s.role==='admin'?'warn':'off'}">${s.role==='admin'?'管理員':'一般人員'}</span></td>
             <td><span class="pill ${pct>=100?'ok':(pct>0?'warn':'off')}">${pct}%</span></td>
-            <td><button class="icon-btn" onclick="showEditStaffForm('${s.id}')">編輯</button> <button class="icon-btn" onclick="deleteStaff('${s.id}')">刪除</button></td>
+            <td><button class="icon-btn" onclick="showEditStaffForm('${s.id}')">編輯</button> <button class="icon-btn" onclick="deleteStaff(this,'${s.id}')">刪除</button></td>
           </tr>`;
         }).join('')}
       </tbody>
@@ -871,7 +883,7 @@ function showAddStaffForm(){
     <div class="card" style="margin-bottom:16px;">
       ${staffFormHtml(null)}
       <div class="form-row">
-        <button class="btn accent" onclick="submitNewStaff()">儲存</button>
+        <button class="btn accent" onclick="submitNewStaff(this)">儲存</button>
         <button class="btn ghost" onclick="document.getElementById('addStaffFormWrap').innerHTML=''">取消</button>
       </div>
     </div>
@@ -886,7 +898,7 @@ function showEditStaffForm(id){
       <div class="section-title" style="margin-top:0;">編輯人員</div>
       ${staffFormHtml(s)}
       <div class="form-row">
-        <button class="btn accent" onclick="submitEditStaff('${id}')">儲存變更</button>
+        <button class="btn accent" onclick="submitEditStaff(this,'${id}')">儲存變更</button>
         <button class="btn ghost" onclick="document.getElementById('addStaffFormWrap').innerHTML=''">取消</button>
       </div>
     </div>
@@ -899,12 +911,13 @@ function readStaffForm(){
   const role = document.getElementById('staffFormRole').value;
   return {name, dept, email, role};
 }
-async function submitNewStaff(){
+async function submitNewStaff(btn){
   const f = readStaffForm();
   if(!f.name){ alert('請輸入姓名'); return; }
   if(!f.email){ if(!confirm('未填寫Email的話,任何人都能不驗證身分就切換成這個人,確定要不填嗎?')) return; }
+  const restore = lockBtn(btn, '儲存中...');
   let latest;
-  try{ latest = await loadStaff(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); return; }
+  try{ latest = await loadStaff(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   latest.push({id:uid(), name:f.name, dept:f.dept, email:f.email, role:f.role});
   STATE.staff = latest;
   await saveStaff(STATE.staff);
@@ -913,13 +926,14 @@ async function submitNewStaff(){
   updateNavVisibility();
   render();
 }
-async function submitEditStaff(id){
+async function submitEditStaff(btn, id){
   const f = readStaffForm();
   if(!f.name){ alert('請輸入姓名'); return; }
+  const restore = lockBtn(btn, '儲存中...');
   let latest;
-  try{ latest = await loadStaff(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); return; }
+  try{ latest = await loadStaff(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   const s = latest.find(x=>x.id===id);
-  if(!s){ alert('找不到這位人員,可能已被其他人刪除,請重新整理頁面。'); return; }
+  if(!s){ alert('找不到這位人員,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
   s.name = f.name; s.dept = f.dept; s.email = f.email; s.role = f.role;
   STATE.staff = latest;
   await saveStaff(STATE.staff);
@@ -941,11 +955,12 @@ async function changeAdminPassword(){
   alert('管理員密碼已更新。');
 }
 
-async function deleteStaff(id){
+async function deleteStaff(btn, id){
   if(STATE.staff.length<=1){ alert('至少需保留一位人員'); return; }
   if(!confirm('確定刪除此人員?學習紀錄將一併移除。')) return;
+  const restore = lockBtn(btn, '刪除中...');
   let latest, latestProgress;
-  try{ latest = await loadStaff(); latestProgress = await loadProgress(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); return; }
+  try{ latest = await loadStaff(); latestProgress = await loadProgress(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   STATE.staff = latest.filter(s=>s.id!==id);
   delete latestProgress[id];
   STATE.progress = latestProgress;

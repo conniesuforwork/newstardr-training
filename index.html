@@ -440,17 +440,27 @@ function renderDashboard(){
   const totalStaff = STATE.staff.length;
   const totalCourses = STATE.courses.length;
   let totalAssignments=0, totalCompleted=0, pendingQuiz=0;
+  const notStartedByCourse = {};
+  const pendingQuizByCourse = {};
   STATE.staff.forEach(s=>{
     coursesForStaff(s).forEach(c=>{
       totalAssignments++;
       const p = userProgress(s.id)[c.id];
-      if(p && p.watched && p.quizPassed) totalCompleted++;
-      if(p && p.watched && !p.quizPassed) pendingQuiz++;
+      if(p && p.watched && p.quizPassed){
+        totalCompleted++;
+      } else if(p && p.watched && !p.quizPassed){
+        pendingQuiz++;
+        (pendingQuizByCourse[c.id] = pendingQuizByCourse[c.id] || {title:c.title, names:[]}).names.push(s.name);
+      } else {
+        (notStartedByCourse[c.id] = notStartedByCourse[c.id] || {title:c.title, names:[]}).names.push(s.name);
+      }
     });
   });
   const rate = totalAssignments? Math.round(totalCompleted/totalAssignments*100):0;
   const u = currentUser();
   const myCourses = coursesForStaff(u);
+  const pendingList = Object.values(pendingQuizByCourse);
+  const notStartedList = Object.values(notStartedByCourse);
 
   return `
   <div class="topbar">
@@ -475,6 +485,19 @@ function renderDashboard(){
         const pct = courseCompletionPct(u.id, c.id);
         return `<div class="bar-row"><div class="name">${escapeHtml(c.title)}</div><div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div><div class="pct">${pct}%</div></div>`;
       }).join('')}
+  </div>
+
+  <div class="two-col" style="margin-top:20px;">
+    <div class="card">
+      <div class="section-title" style="margin-top:0;">待測驗名單(已看完影片,尚未通過測驗)</div>
+      ${pendingList.length===0? '<div class="empty">目前沒有人卡在這個階段。</div>' :
+        pendingList.map(g=>`<div style="margin-bottom:10px;"><div style="font-weight:600;font-size:13px;margin-bottom:4px;">${escapeHtml(g.title)}</div><div class="muted">${g.names.map(escapeHtml).join('、')}</div></div>`).join('')}
+    </div>
+    <div class="card">
+      <div class="section-title" style="margin-top:0;">尚未開始名單</div>
+      ${notStartedList.length===0? '<div class="empty">目前所有人都已開始上課。</div>' :
+        notStartedList.map(g=>`<div style="margin-bottom:10px;"><div style="font-weight:600;font-size:13px;margin-bottom:4px;">${escapeHtml(g.title)}</div><div class="muted">${g.names.map(escapeHtml).join('、')}</div></div>`).join('')}
+    </div>
   </div>
   `;
 }

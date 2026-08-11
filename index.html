@@ -296,25 +296,53 @@ function hideLoginGate(){
   document.querySelector('.app').style.display = 'flex';
 }
 
+function staffCategory(s){
+  return s.role==='admin' ? '管理員' : (s.dept || '未分類');
+}
+function loginCategories(){
+  const set = new Set(STATE.staff.map(staffCategory));
+  const arr = Array.from(set);
+  arr.sort((a,b)=>{
+    if(a==='管理員') return -1;
+    if(b==='管理員') return 1;
+    return a.localeCompare(b, 'zh-Hant');
+  });
+  return arr;
+}
+
 function renderLoginGateContent(){
   const gate = document.getElementById('loginGate');
+  const categories = loginCategories();
+  const currentStaff = STATE.staff.find(s=>s.id===STATE.currentUserId);
+  const defaultCategory = currentStaff? staffCategory(currentStaff) : categories[0];
   gate.innerHTML = `
     <div class="login-card">
       <div class="login-logo">欣</div>
       <h2>欣莘醫美集團</h2>
       <div class="muted">內部教育訓練系統</div>
-      <label class="login-label">請選擇登入身份</label>
-      <select id="loginUserSelect" class="field" style="width:100%;">
-        ${STATE.staff.map(s=>`<option value="${s.id}" ${s.id===STATE.currentUserId?'selected':''}>${escapeHtml(s.name)}${s.role==='admin'?'(管理員)':''}</option>`).join('')}
+      <label class="login-label">請選擇身份類別</label>
+      <select id="loginCategorySelect" class="field" style="width:100%;">
+        ${categories.map(c=>`<option value="${escapeHtml(c)}" ${c===defaultCategory?'selected':''}>${escapeHtml(c)}</option>`).join('')}
       </select>
+      <label class="login-label">請選擇姓名</label>
+      <select id="loginUserSelect" class="field" style="width:100%;"></select>
       <div id="loginEmailWrap"></div>
       <div id="loginPasswordWrap"></div>
       <div id="loginError" class="login-error" style="display:none;"></div>
       <button class="btn accent" style="width:100%;margin-top:16px;" onclick="attemptLogin()">登入</button>
     </div>
   `;
+  document.getElementById('loginCategorySelect').onchange = ()=>{ updateLoginUserOptions(); updateLoginFieldsVisibility(); };
+  updateLoginUserOptions();
   document.getElementById('loginUserSelect').onchange = updateLoginFieldsVisibility;
   updateLoginFieldsVisibility();
+}
+
+function updateLoginUserOptions(){
+  const cat = document.getElementById('loginCategorySelect').value;
+  const sel = document.getElementById('loginUserSelect');
+  const matching = STATE.staff.filter(s=>staffCategory(s)===cat);
+  sel.innerHTML = matching.map(s=>`<option value="${s.id}" ${s.id===STATE.currentUserId?'selected':''}>${escapeHtml(s.name)}</option>`).join('');
 }
 
 function updateLoginFieldsVisibility(){

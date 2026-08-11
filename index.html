@@ -350,7 +350,8 @@ async function attemptLogin(){
   if(hasAnyAdmin && staffObj.role==='admin'){
     const pwInput = document.getElementById('loginPasswordInput');
     const pwVal = pwInput? pwInput.value : '';
-    if(pwVal !== STATE.adminPassword){
+    const expectedPw = staffObj.password || STATE.adminPassword;
+    if(pwVal !== expectedPw){
       errEl.textContent = '管理員密碼不正確。';
       errEl.style.display = '';
       return;
@@ -844,13 +845,11 @@ function renderStaff(){
   return `
   <div class="topbar">
     <h1>人員管理</h1>
-    <div>
-      <button class="btn ghost" onclick="changeAdminPassword()">變更管理員密碼</button>
-      <button class="btn accent" onclick="showAddStaffForm()">+ 新增人員</button>
-    </div>
+    <button class="btn accent" onclick="showAddStaffForm()">+ 新增人員</button>
   </div>
   <div id="addStaffFormWrap"></div>
   <div class="card">
+    <div class="muted" style="margin-bottom:12px;">每位管理員的密碼各自獨立,可在下方點「編輯」個別設定或修改。</div>
     <table>
       <thead><tr><th>姓名</th><th>部門/職稱</th><th>Email</th><th>身分</th><th>整體完成率</th><th></th></tr></thead>
       <tbody>
@@ -886,7 +885,14 @@ function staffFormHtml(s){
         <option value="admin" ${s.role==='admin'?'selected':''}>管理員</option>
       </select>
     </div>
+    <div id="staffFormPasswordWrap" style="display:${s.role==='admin'?'':'none'};margin-bottom:10px;">
+      <input type="password" id="staffFormPassword" class="field" style="width:100%;" placeholder="${s.password? '管理員密碼(留空 = 不更動)' : '設定此管理員的專屬密碼'}">
+    </div>
   `;
+}
+function toggleStaffPasswordField(){
+  const role = document.getElementById('staffFormRole').value;
+  document.getElementById('staffFormPasswordWrap').style.display = (role==='admin')? '' : 'none';
 }
 function showAddStaffForm(){
   const wrap = document.getElementById('addStaffFormWrap');
@@ -899,6 +905,7 @@ function showAddStaffForm(){
       </div>
     </div>
   `;
+  document.getElementById('staffFormRole').onchange = toggleStaffPasswordField;
 }
 function showEditStaffForm(id){
   const s = STATE.staff.find(x=>x.id===id);
@@ -914,22 +921,28 @@ function showEditStaffForm(id){
       </div>
     </div>
   `;
+  document.getElementById('staffFormRole').onchange = toggleStaffPasswordField;
+  wrap.scrollIntoView({behavior:'smooth'});
 }
 function readStaffForm(){
   const name = document.getElementById('staffFormName').value.trim();
   const dept = document.getElementById('staffFormDept').value.trim();
   const email = document.getElementById('staffFormEmail').value.trim();
   const role = document.getElementById('staffFormRole').value;
-  return {name, dept, email, role};
+  const password = document.getElementById('staffFormPassword')? document.getElementById('staffFormPassword').value : '';
+  return {name, dept, email, role, password};
 }
 async function submitNewStaff(btn){
   const f = readStaffForm();
   if(!f.name){ alert('請輸入姓名'); return; }
   if(!f.email){ if(!confirm('未填寫Email的話,任何人都能不驗證身分就切換成這個人,確定要不填嗎?')) return; }
+  if(f.role==='admin' && !f.password){ alert('請為這位管理員設定專屬密碼'); return; }
   const restore = lockBtn(btn, '儲存中...');
   let latest;
   try{ latest = await loadStaff(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
-  latest.push({id:uid(), name:f.name, dept:f.dept, email:f.email, role:f.role});
+  const newStaff = {id:uid(), name:f.name, dept:f.dept, email:f.email, role:f.role};
+  if(f.role==='admin') newStaff.password = f.password;
+  latest.push(newStaff);
   STATE.staff = latest;
   await saveStaff(STATE.staff);
   document.getElementById('addStaffFormWrap').innerHTML='';
@@ -946,6 +959,12 @@ async function submitEditStaff(btn, id){
   const s = latest.find(x=>x.id===id);
   if(!s){ alert('找不到這位人員,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
   s.name = f.name; s.dept = f.dept; s.email = f.email; s.role = f.role;
+  if(f.role==='admin'){
+    if(f.password) s.password = f.password;
+    else if(!s.password){ alert('請為這位管理員設定專屬密碼'); restore(); return; }
+  } else {
+    delete s.password;
+  }
   STATE.staff = latest;
   await saveStaff(STATE.staff);
   document.getElementById('addStaffFormWrap').innerHTML='';
@@ -953,18 +972,7 @@ async function submitEditStaff(btn, id){
   updateNavVisibility();
   render();
 }
-async function changeAdminPassword(){
-  const current = prompt('請輸入目前的管理員密碼:');
-  if(current === null) return;
-  if(current !== STATE.adminPassword){ alert('目前密碼不正確'); return; }
-  const next = prompt('請輸入新密碼:');
-  if(!next) return;
-  const confirmPw = prompt('請再輸入一次新密碼確認:');
-  if(next !== confirmPw){ alert('兩次輸入的新密碼不一致,請重新操作。'); return; }
-  STATE.adminPassword = next;
-  await saveAdminPassword(next);
-  alert('管理員密碼已更新。');
-}
+
 
 async function deleteStaff(btn, id){
   if(STATE.staff.length<=1){ alert('至少需保留一位人員'); return; }

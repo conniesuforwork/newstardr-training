@@ -853,6 +853,19 @@ function renderQuizBody(course, u){
     return `
     <div class="card">
       <div class="result-banner ${r.passed?'pass':'fail'}">${r.passed? '✓ 測驗通過':'✗ 未達通過標準'} — 得分 ${r.score}%(答對 ${r.correct}/${r.total} 題)</div>
+      ${r.details.map((d,i)=>`
+        <div class="quiz-q" style="border-color:${d.isCorrect?'var(--border)':'#c98f7c'};">
+          <div style="font-weight:600;margin-bottom:6px;">${i+1}. ${escapeHtml(d.q)} ${d.isCorrect? '<span class="pill ok" style="margin-left:6px;">答對</span>' : '<span class="pill" style="background:#f3e4de;color:#b06a54;margin-left:6px;">答錯</span>'}</div>
+          ${d.options.map((opt,oi)=>{
+            let mark = '　';
+            let style = 'color:var(--sub);';
+            if(oi===d.correct){ mark='✓'; style='color:var(--ok);font-weight:600;'; }
+            else if(oi===d.selected){ mark='✗'; style='color:#b06a54;text-decoration:line-through;'; }
+            return `<div style="padding:3px 0;${style}">${mark} ${escapeHtml(opt)}</div>`;
+          }).join('')}
+          ${(d.selected===undefined||d.selected===null)? '<div class="muted" style="margin-top:4px;">(未作答)</div>' : ''}
+        </div>
+      `).join('')}
       <button class="btn ghost small" onclick="STATE.quizResult=null;render();">重新測驗</button>
     </div>`;
   }
@@ -882,7 +895,12 @@ async function submitQuiz(btn, courseId){
   const course = STATE.courses.find(c=>c.id===courseId);
   const u = currentUser();
   let correct = 0;
-  course.quiz.forEach((q,i)=>{ if(STATE.quizAnswers[i]===q.answer) correct++; });
+  const details = course.quiz.map((q,i)=>{
+    const selected = STATE.quizAnswers[i];
+    const isCorrect = selected===q.answer;
+    if(isCorrect) correct++;
+    return {q:q.q, options:q.options, selected, correct:q.answer, isCorrect};
+  });
   const total = course.quiz.length;
   const score = Math.round(correct/total*100);
   const passed = score >= 70;
@@ -895,7 +913,7 @@ async function submitQuiz(btn, courseId){
   latest[u.id][courseId].quizPassed = passed;
   STATE.progress = latest;
   await saveProgress(STATE.progress);
-  STATE.quizResult = {courseId, correct, total, score, passed};
+  STATE.quizResult = {courseId, correct, total, score, passed, details};
   render();
 }
 

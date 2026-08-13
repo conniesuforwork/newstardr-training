@@ -414,13 +414,20 @@ function coursesForStaff(staffObj){
   return STATE.courses.filter(c=> !c.targetDepts || c.targetDepts.length===0 || c.targetDepts.includes(staffObj.dept));
 }
 
+function isCourseComplete(staffId, courseId){
+  const course = STATE.courses.find(c=>c.id===courseId);
+  const p = userProgress(staffId)[courseId];
+  if(!course) return false;
+  if(course.quiz && course.quiz.length) return !!(p && p.quizPassed);
+  return !!(p && p.watched);
+}
+
 function courseCompletionPct(staffId, courseId){
+  const course = STATE.courses.find(c=>c.id===courseId);
   const p = userProgress(staffId)[courseId];
   if(!p) return 0;
-  let pct = 0;
-  if(p.watched) pct += 50;
-  if(p.quizPassed) pct += 50;
-  return pct;
+  if(course && course.quiz && course.quiz.length) return p.quizPassed? 100 : 0;
+  return p.watched? 100 : 0;
 }
 
 /* ---------- Render router ---------- */
@@ -446,9 +453,9 @@ function renderDashboard(){
     coursesForStaff(s).forEach(c=>{
       totalAssignments++;
       const p = userProgress(s.id)[c.id];
-      if(p && p.watched && p.quizPassed){
+      if(isCourseComplete(s.id, c.id)){
         totalCompleted++;
-      } else if(p && p.watched && !p.quizPassed){
+      } else if(p){
         pendingQuiz++;
         (pendingQuizByCourse[c.id] = pendingQuizByCourse[c.id] || {title:c.title, names:[]}).names.push(s.name);
       } else {
@@ -489,7 +496,7 @@ function renderDashboard(){
 
   <div class="two-col" style="margin-top:20px;">
     <div class="card">
-      <div class="section-title" style="margin-top:0;">待測驗名單(已看完影片,尚未通過測驗)</div>
+      <div class="section-title" style="margin-top:0;">待測驗名單(已開始上課,尚未通過測驗)</div>
       ${pendingList.length===0? '<div class="empty">目前沒有人卡在這個階段。</div>' :
         pendingList.map(g=>`<div style="margin-bottom:10px;"><div style="font-weight:600;font-size:13px;margin-bottom:4px;">${escapeHtml(g.title)}</div><div class="muted">${g.names.map(escapeHtml).join('、')}</div></div>`).join('')}
     </div>
@@ -558,9 +565,10 @@ function renderCourses(){
       <div class="course-list">
         ${visibleCourses.map(c=>{
           const p = userProgress(u.id)[c.id];
+          const complete = isCourseComplete(u.id, c.id);
           return `<div class="course-item ${c.id===STATE.selectedCourseId?'selected':''}" onclick="selectCourse('${c.id}')">
             <div><h4>${escapeHtml(c.title)}</h4><p>${p&&p.watched?'已觀看':'未觀看'} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''}</p></div>
-            <span class="pill ${p&&p.watched&&p.quizPassed?'ok':(p&&p.watched?'warn':'off')}">${p&&p.watched&&p.quizPassed?'完成':(p&&p.watched?'待測驗':'未開始')}</span>
+            <span class="pill ${complete?'ok':(p?'warn':'off')}">${complete?'完成':(p?'待測驗':'未開始')}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無課程</div>'}
       </div>
@@ -908,7 +916,7 @@ function renderStaff(){
           const myCourses = coursesForStaff(s);
           const total = myCourses.length;
           let done=0;
-          myCourses.forEach(c=>{ const p=userProgress(s.id)[c.id]; if(p&&p.watched&&p.quizPassed) done++; });
+          myCourses.forEach(c=>{ if(isCourseComplete(s.id, c.id)) done++; });
           const pct = total? Math.round(done/total*100):0;
           return `<tr>
             <td>${escapeHtml(s.name)}</td>
@@ -1046,29 +1054,46 @@ async function deleteStaff(btn, id){
 function renderReports(){
   return `
   <div class="topbar"><h1>學習報表</h1></div>
-  <div class="two-col">
-    <div class="card">
-      <div class="section-title" style="margin-top:0;">各人員完成率</div>
-      ${STATE.staff.map(s=>{
-        const myCourses = coursesForStaff(s);
-        const total = myCourses.length;
-        let done=0;
-        myCourses.forEach(c=>{ const p=userProgress(s.id)[c.id]; if(p&&p.watched&&p.quizPassed) done++; });
-        const pct = total? Math.round(done/total*100):0;
-        return `<div class="bar-row"><div class="name">${escapeHtml(s.name)}</div><div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div><div class="pct">${pct}%</div></div>`;
-      }).join('') || '<div class="empty">尚無人員資料</div>'}
-    </div>
-    <div class="card">
-      <div class="section-title" style="margin-top:0;">各課程觀看時數(全體累計)</div>
-      ${STATE.courses.map(c=>{
-        let totalSec=0;
-        STATE.staff.forEach(s=>{ const p=userProgress(s.id)[c.id]; if(p) totalSec += (p.watchSeconds||0); });
-        const mins = Math.round(totalSec/60);
-        const maxMin = 60;
-        const pct = Math.min(100, Math.round(mins/maxMin*100));
-        return `<div class="bar-row"><div class="name">${escapeHtml(c.title)}</div><div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div><div class="pct">${mins}分</div></div>`;
-      }).join('') || '<div class="empty">尚無課程資料</div>'}
-    </div>
+  <div class="card" style="margin-bottom:20px;">
+    <div class="section-title" style="margin-top:0;">各人員詳細狀況</div>
+    <table>
+      <thead><tr><th>姓名</th><th>部門/職稱</th><th>完成率</th><th>觀看時數</th><th>測驗平均分數</th></tr></thead>
+      <tbody>
+        ${STATE.staff.map(s=>{
+          const myCourses = coursesForStaff(s);
+          const total = myCourses.length;
+          let done=0, watchSec=0;
+          const scores=[];
+          myCourses.forEach(c=>{
+            const p = userProgress(s.id)[c.id];
+            if(isCourseComplete(s.id, c.id)) done++;
+            if(p) watchSec += (p.watchSeconds||0);
+            if(p && typeof p.quizScore==='number') scores.push(p.quizScore);
+          });
+          const pct = total? Math.round(done/total*100):0;
+          const mins = Math.floor(watchSec/60), secs = Math.floor(watchSec%60);
+          const avgScore = scores.length? Math.round(scores.reduce((a,b)=>a+b,0)/scores.length) : null;
+          return `<tr>
+            <td>${escapeHtml(s.name)}</td>
+            <td>${escapeHtml(s.dept||'-')}</td>
+            <td><span class="pill ${pct>=100?'ok':(pct>0?'warn':'off')}">${pct}%</span></td>
+            <td>${mins} 分 ${secs} 秒</td>
+            <td>${avgScore===null? '<span class="muted">尚未測驗</span>' : avgScore+'分'}</td>
+          </tr>`;
+        }).join('') || '<tr><td colspan="5" class="empty">尚無人員資料</td></tr>'}
+      </tbody>
+    </table>
+  </div>
+  <div class="card">
+    <div class="section-title" style="margin-top:0;">各課程觀看時數(全體累計)</div>
+    ${STATE.courses.map(c=>{
+      let totalSec=0;
+      STATE.staff.forEach(s=>{ const p=userProgress(s.id)[c.id]; if(p) totalSec += (p.watchSeconds||0); });
+      const mins = Math.round(totalSec/60);
+      const maxMin = 60;
+      const pct = Math.min(100, Math.round(mins/maxMin*100));
+      return `<div class="bar-row"><div class="name">${escapeHtml(c.title)}</div><div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div><div class="pct">${mins}分</div></div>`;
+    }).join('') || '<div class="empty">尚無課程資料</div>'}
   </div>
   `;
 }

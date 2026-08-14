@@ -335,7 +335,7 @@ function hideLoginGate(){
 
 function parseDeptParts(raw){
   if(!raw) return [];
-  return raw.split(/\s*\/\s*|\s{2,}/).map(p=>p.trim()).filter(Boolean);
+  return raw.split(/[\/／]+|[\s\u3000]+/).map(p=>p.trim()).filter(Boolean);
 }
 function staffDept(s){
   if(s.role==='admin') return '管理部';

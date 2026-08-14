@@ -154,7 +154,7 @@ function jsonpRequest(params){
   return new Promise((resolve, reject)=>{
     const cbName = 'lms_cb_' + (__jsonpCounter++) + '_' + Date.now();
     const script = document.createElement('script');
-    const timeout = setTimeout(()=>{ cleanup(); reject(new Error('timeout')); }, 15000);
+    const timeout = setTimeout(()=>{ cleanup(); reject(new Error('timeout')); }, 25000);
     function cleanup(){ clearTimeout(timeout); delete window[cbName]; script.remove(); }
     window[cbName] = (data)=>{ cleanup(); resolve(data); };
     const qs = new URLSearchParams(Object.assign({}, params, { callback: cbName })).toString();
@@ -162,6 +162,18 @@ function jsonpRequest(params){
     script.onerror = ()=>{ cleanup(); reject(new Error('script load error')); };
     document.body.appendChild(script);
   });
+}
+async function jsonpRequestWithRetry(params, retries){
+  retries = (retries===undefined)? 1 : retries;
+  try{
+    return await jsonpRequest(params);
+  }catch(e){
+    if(retries > 0){
+      await new Promise(r=>setTimeout(r, 800));
+      return jsonpRequestWithRetry(params, retries-1);
+    }
+    throw e;
+  }
 }
 function xhrPost(url, data){
   return new Promise((resolve, reject)=>{
@@ -174,7 +186,7 @@ function xhrPost(url, data){
   });
 }
 async function apiGet(key){
-  const val = await jsonpRequest({ key: key });
+  const val = await jsonpRequestWithRetry({ key: key }, 1);
   return val; // null is a legitimate "key not found" result
 }
 async function apiSet(key, value){

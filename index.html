@@ -220,7 +220,32 @@ function ytId(url){
 /* ---------- App state ---------- */
 let STATE = { view:'dashboard', staff:[], courses:[], progress:{}, currentUserId:null, selectedCourseId:null, quizAnswers:{}, quizResult:null, player:null, adminPassword:'admin123', adminAuthed:false };
 
-async function initApp(){
+function isInAppBrowser(){
+  const ua = navigator.userAgent || '';
+  return /Line\/|FBAN|FBAV|Instagram|MicroMessenger|Weibo/i.test(ua);
+}
+
+function showInAppBrowserWarning(){
+  const gate = document.getElementById('loginGate');
+  gate.style.display = 'flex';
+  document.querySelector('.app').style.display = 'none';
+  gate.innerHTML = `
+    <div class="login-card">
+      <div class="login-logo">欣</div>
+      <h2>請改用瀏覽器開啟</h2>
+      <div class="muted">偵測到您正在使用LINE(或類似App)內建的瀏覽器,連線不穩定,可能導致資料無法正常讀取或儲存。</div>
+      <div class="muted" style="margin-top:10px;text-align:left;">請點選右上角(或下方)「⋯」選單 → 選擇「用外部瀏覽器開啟」或「在Safari/Chrome中開啟」,會更穩定。</div>
+      <button class="btn accent" style="width:100%;margin-top:16px;" onclick="proceedAnyway()">我了解,仍要繼續使用</button>
+    </div>
+  `;
+}
+function proceedAnyway(){ initApp(true); }
+
+async function initApp(skipWarning){
+  if(!skipWarning && isInAppBrowser()){
+    showInAppBrowserWarning();
+    return;
+  }
   showLoadingGate();
   try{
     STATE.staff = await loadStaff();

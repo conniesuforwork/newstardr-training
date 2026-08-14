@@ -333,15 +333,27 @@ function hideLoginGate(){
   document.querySelector('.app').style.display = 'flex';
 }
 
-function staffCategory(s){
-  return s.role==='admin' ? '管理員' : (s.dept || '未分類');
+function parseDeptParts(raw){
+  if(!raw) return [];
+  return raw.split(/\s*\/\s*|\s{2,}/).map(p=>p.trim()).filter(Boolean);
 }
-function loginCategories(){
-  const set = new Set(STATE.staff.map(staffCategory));
+function staffDept(s){
+  if(s.role==='admin') return '管理部';
+  const parts = parseDeptParts(s.dept);
+  return parts.length? parts[0] : '未分類';
+}
+function staffSubCategory(s){
+  if(s.role==='admin') return '管理員';
+  const parts = parseDeptParts(s.dept);
+  if(!parts.length) return '未分類';
+  return parts.length>1 ? parts.slice(1).join(' ') : parts[0];
+}
+function loginDepartments(){
+  const set = new Set(STATE.staff.map(staffDept));
   const arr = Array.from(set);
   arr.sort((a,b)=>{
-    if(a==='管理員') return -1;
-    if(b==='管理員') return 1;
+    if(a==='管理部') return -1;
+    if(b==='管理部') return 1;
     return a.localeCompare(b, 'zh-Hant');
   });
   return arr;
@@ -349,18 +361,19 @@ function loginCategories(){
 
 function renderLoginGateContent(){
   const gate = document.getElementById('loginGate');
-  const categories = loginCategories();
+  const depts = loginDepartments();
   const currentStaff = STATE.staff.find(s=>s.id===STATE.currentUserId);
-  const defaultCategory = currentStaff? staffCategory(currentStaff) : categories[0];
+  const defaultDept = currentStaff? staffDept(currentStaff) : depts[0];
   gate.innerHTML = `
     <div class="login-card">
       <div class="login-logo">欣</div>
       <h2>欣莘醫美集團</h2>
       <div class="muted">內部教育訓練系統</div>
-      <label class="login-label">請選擇身份類別</label>
-      <select id="loginCategorySelect" class="field" style="width:100%;">
-        ${categories.map(c=>`<option value="${escapeHtml(c)}" ${c===defaultCategory?'selected':''}>${escapeHtml(c)}</option>`).join('')}
+      <label class="login-label">請選擇部門</label>
+      <select id="loginDeptSelect" class="field" style="width:100%;">
+        ${depts.map(d=>`<option value="${escapeHtml(d)}" ${d===defaultDept?'selected':''}>${escapeHtml(d)}</option>`).join('')}
       </select>
+      <div id="loginCategoryWrap"></div>
       <label class="login-label">請選擇姓名</label>
       <select id="loginUserSelect" class="field" style="width:100%;"></select>
       <div id="loginEmailWrap"></div>
@@ -369,16 +382,40 @@ function renderLoginGateContent(){
       <button class="btn accent" style="width:100%;margin-top:16px;" onclick="attemptLogin()">登入</button>
     </div>
   `;
-  document.getElementById('loginCategorySelect').onchange = ()=>{ updateLoginUserOptions(); updateLoginFieldsVisibility(); };
+  document.getElementById('loginDeptSelect').onchange = ()=>{ updateLoginCategoryOptions(); updateLoginUserOptions(); updateLoginFieldsVisibility(); };
+  updateLoginCategoryOptions();
   updateLoginUserOptions();
   document.getElementById('loginUserSelect').onchange = updateLoginFieldsVisibility;
   updateLoginFieldsVisibility();
 }
 
+function updateLoginCategoryOptions(){
+  const dept = document.getElementById('loginDeptSelect').value;
+  const wrap = document.getElementById('loginCategoryWrap');
+  const inDept = STATE.staff.filter(s=>staffDept(s)===dept);
+  const cats = Array.from(new Set(inDept.map(staffSubCategory)));
+  if(cats.length<=1){
+    wrap.innerHTML = `<input type="hidden" id="loginCategorySelect" value="${cats[0]? escapeHtml(cats[0]):''}">`;
+  } else {
+    cats.sort((a,b)=>a.localeCompare(b, 'zh-Hant'));
+    const currentStaff = STATE.staff.find(s=>s.id===STATE.currentUserId);
+    const defaultCat = (currentStaff && staffDept(currentStaff)===dept)? staffSubCategory(currentStaff) : cats[0];
+    wrap.innerHTML = `
+      <label class="login-label">請選擇身分類別</label>
+      <select id="loginCategorySelect" class="field" style="width:100%;">
+        ${cats.map(c=>`<option value="${escapeHtml(c)}" ${c===defaultCat?'selected':''}>${escapeHtml(c)}</option>`).join('')}
+      </select>
+    `;
+    document.getElementById('loginCategorySelect').onchange = ()=>{ updateLoginUserOptions(); updateLoginFieldsVisibility(); };
+  }
+}
+
 function updateLoginUserOptions(){
-  const cat = document.getElementById('loginCategorySelect').value;
+  const dept = document.getElementById('loginDeptSelect').value;
+  const catEl = document.getElementById('loginCategorySelect');
+  const cat = catEl? catEl.value : '';
   const sel = document.getElementById('loginUserSelect');
-  const matching = STATE.staff.filter(s=>staffCategory(s)===cat);
+  const matching = STATE.staff.filter(s=> staffDept(s)===dept && staffSubCategory(s)===cat);
   sel.innerHTML = matching.map(s=>`<option value="${s.id}" ${s.id===STATE.currentUserId?'selected':''}>${escapeHtml(s.name)}</option>`).join('');
 }
 

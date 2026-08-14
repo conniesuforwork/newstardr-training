@@ -613,7 +613,7 @@ function renderCourses(){
               <p class="muted" style="max-width:520px;">${escapeHtml(selected.desc||'')}</p>
               ${selected.targetDepts && selected.targetDepts.length? `<p class="muted" style="margin-top:6px;">適用部門:${selected.targetDepts.map(escapeHtml).join('、')}</p>` : ''}
             </div>
-            <div>
+            <div id="watchedPillWrap">
               ${prog && prog.watched? '<span class="pill ok">已觀看</span>' : '<span class="pill off">尚未觀看</span>'}
               ${prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill warn">待測驗</span>':'')}
             </div>
@@ -624,7 +624,7 @@ function renderCourses(){
               ${selected.materials.map(m=>`<div style="margin-bottom:4px;"><a href="${escapeHtml(m.url)}" target="_blank" rel="noopener" class="btn ghost small" style="text-decoration:none;display:inline-block;">📄 ${escapeHtml(m.name||'講義')}</a></div>`).join('')}
             </div>
           ` : ''}
-          <div class="muted" style="margin-top:10px;">累計觀看時間:${Math.floor((prog?.watchSeconds||0)/60)} 分 ${Math.floor((prog?.watchSeconds||0)%60)} 秒</div>
+          <div class="muted" id="watchTimeLabel" style="margin-top:10px;">累計觀看時間:${Math.floor((prog?.watchSeconds||0)/60)} 分 ${Math.floor((prog?.watchSeconds||0)%60)} 秒</div>
           ${selected.quiz && selected.quiz.length? `<button class="btn ghost small" style="margin-top:10px;" onclick="goToQuiz('${selected.id}')">前往測驗 →</button>`:''}
           ${admin? `
           <div style="margin-top:10px;">
@@ -867,11 +867,28 @@ async function addWatchSeconds(sec, forceWatched){
   if(!latest[u.id]) latest[u.id] = {};
   if(!latest[u.id][cid]) latest[u.id][cid] = {watchSeconds:0, watched:false, quizPassed:false};
   latest[u.id][cid].watchSeconds = (latest[u.id][cid].watchSeconds||0) + sec;
+  const justWatched = !latest[u.id][cid].watched && (latest[u.id][cid].watchSeconds >= 20 || forceWatched);
   if(latest[u.id][cid].watchSeconds >= 20 || forceWatched) latest[u.id][cid].watched = true;
   STATE.progress = latest;
   await saveProgress(STATE.progress);
-  const label = document.querySelector('.two-col .muted');
-  if(label) render();
+  // Update the on-screen label/pill directly — do NOT call render() here,
+  // it would destroy and recreate the YouTube player mid-playback.
+  const label = document.getElementById('watchTimeLabel');
+  if(label){
+    const p = latest[u.id][cid];
+    label.textContent = `累計觀看時間:${Math.floor((p.watchSeconds||0)/60)} 分 ${Math.floor((p.watchSeconds||0)%60)} 秒`;
+  }
+  if(justWatched){
+    const pillWrap = document.getElementById('watchedPillWrap');
+    if(pillWrap){
+      const course = STATE.courses.find(c=>c.id===cid);
+      const p = latest[u.id][cid];
+      pillWrap.innerHTML = `
+        <span class="pill ok">已觀看</span>
+        ${p.quizPassed? '<span class="pill ok">測驗通過</span>' : (course && course.quiz && course.quiz.length? '<span class="pill warn">待測驗</span>':'')}
+      `;
+    }
+  }
 }
 
 function goToQuiz(courseId){

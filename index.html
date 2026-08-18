@@ -690,7 +690,7 @@ function renderDocuments(){
             </div>
           ` : '<div class="muted" style="margin-top:14px;">尚未附加任何文件檔案。</div>'}
           ${selected.quiz && selected.quiz.length? `<button class="btn ghost small" style="margin-top:14px;" onclick="goToQuiz('${selected.id}')">前往測驗 →</button>`
-            : `<button class="btn ghost small" style="margin-top:14px;" onclick="markReadComplete('${selected.id}')" ${prog&&prog.watched?'disabled':''}>${prog&&prog.watched?'已完成閱讀':'我已閱讀完成'}</button>`}
+            : `<button class="btn ghost small" style="margin-top:14px;" onclick="markReadComplete(this,'${selected.id}')" ${prog&&prog.watched?'disabled':''}>${prog&&prog.watched?'已完成閱讀':'我已閱讀完成'}</button>`}
           ${admin? `
           <div style="margin-top:10px;">
             <button class="btn ghost small" onclick="showEditCourseForm('${selected.id}',false)">編輯資料</button>
@@ -900,15 +900,17 @@ function onYouTubeIframeAPIReady(){
   ytReadyQueue = [];
 }
 let watchTimer = null;
-async function markReadComplete(courseId){
+async function markReadComplete(btn, courseId){
   const u = currentUser();
+  const restore = lockBtn(btn, '儲存中...');
   let latest;
-  try{ latest = await loadProgress(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); return; }
+  try{ latest = await loadProgress(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   if(!latest[u.id]) latest[u.id] = {};
   if(!latest[u.id][courseId]) latest[u.id][courseId] = {watchSeconds:0, watched:false, quizPassed:false};
   latest[u.id][courseId].watched = true;
   STATE.progress = latest;
   await saveProgress(STATE.progress);
+  alert('✓ 已標記為完成閱讀!');
   render();
 }
 

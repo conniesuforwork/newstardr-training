@@ -488,6 +488,9 @@ function coursesForStaff(staffObj){
   if(!staffObj) return STATE.courses;
   return STATE.courses.filter(c=> !c.targetDepts || c.targetDepts.length===0 || c.targetDepts.includes(staffObj.dept));
 }
+function sortPinned(list){
+  return [...list].sort((a,b)=> (b.pinned?1:0) - (a.pinned?1:0));
+}
 
 function isCourseComplete(staffId, courseId){
   const course = STATE.courses.find(c=>c.id===courseId);
@@ -594,7 +597,7 @@ function goView(v){
 function renderCourses(){
   const admin = isAdmin();
   const allVisible = admin? STATE.courses : coursesForStaff(currentUser());
-  const visibleCourses = allVisible.filter(c=>c.videoUrl);
+  const visibleCourses = sortPinned(allVisible.filter(c=>c.videoUrl));
   const selected = visibleCourses.find(c=>c.id===STATE.selectedCourseId) || visibleCourses[0];
   const u = currentUser();
   const prog = selected? userProgress(u.id)[selected.id] : null;
@@ -612,7 +615,7 @@ function renderCourses(){
           <div class="video-wrap"><div id="ytplayer"></div></div>
           <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:flex-start;">
             <div>
-              <h3 style="margin:0 0 6px;">${escapeHtml(selected.title)}</h3>
+              <h3 style="margin:0 0 6px;">${selected.pinned?'⭐ ':''}${escapeHtml(selected.title)}</h3>
               <p class="muted" style="max-width:520px;">${escapeHtml(selected.desc||'')}</p>
               ${selected.targetDepts && selected.targetDepts.length? `<p class="muted" style="margin-top:6px;">適用部門:${selected.targetDepts.map(escapeHtml).join('、')}</p>` : ''}
             </div>
@@ -631,6 +634,7 @@ function renderCourses(){
           ${selected.quiz && selected.quiz.length? `<button class="btn ghost small" style="margin-top:10px;" onclick="goToQuiz('${selected.id}')">前往測驗 →</button>`:''}
           ${admin? `
           <div style="margin-top:10px;">
+            <button class="btn ghost small" onclick="togglePin('${selected.id}')">${selected.pinned?'取消重要標記':'⭐ 設為重要'}</button>
             <button class="btn ghost small" onclick="showEditCourseForm('${selected.id}',true)">編輯課程</button>
             <button class="icon-btn" style="margin-left:10px;" onclick="deleteCourse(this,'${selected.id}')">刪除此課程</button>
           </div>` : ''}
@@ -644,7 +648,7 @@ function renderCourses(){
           const p = userProgress(u.id)[c.id];
           const complete = isCourseComplete(u.id, c.id);
           return `<div class="course-item ${c.id===STATE.selectedCourseId?'selected':''}" onclick="selectCourse('${c.id}')">
-            <div><h4>${escapeHtml(c.title)}</h4><p>${p&&p.watched?'已觀看':'未觀看'} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''}</p></div>
+            <div><h4>${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${p&&p.watched?'已觀看':'未觀看'} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''}</p></div>
             <span class="pill ${complete?'ok':(p?'warn':'off')}">${complete?'完成':(p?'待測驗':'未開始')}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無課程</div>'}
@@ -658,7 +662,7 @@ function renderCourses(){
 function renderDocuments(){
   const admin = isAdmin();
   const allVisible = admin? STATE.courses : coursesForStaff(currentUser());
-  const visibleDocs = allVisible.filter(c=>!c.videoUrl);
+  const visibleDocs = sortPinned(allVisible.filter(c=>!c.videoUrl));
   const selected = visibleDocs.find(c=>c.id===STATE.selectedCourseId) || visibleDocs[0];
   const u = currentUser();
   const prog = selected? userProgress(u.id)[selected.id] : null;
@@ -675,7 +679,7 @@ function renderDocuments(){
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;">
             <div>
-              <h3 style="margin:0 0 6px;">${escapeHtml(selected.title)}</h3>
+              <h3 style="margin:0 0 6px;">${selected.pinned?'⭐ ':''}${escapeHtml(selected.title)}</h3>
               <p class="muted" style="max-width:520px;">${escapeHtml(selected.desc||'')}</p>
               ${selected.targetDepts && selected.targetDepts.length? `<p class="muted" style="margin-top:6px;">適用部門:${selected.targetDepts.map(escapeHtml).join('、')}</p>` : ''}
             </div>
@@ -693,6 +697,7 @@ function renderDocuments(){
             : `<button class="btn ghost small" style="margin-top:14px;" onclick="markReadComplete(this,'${selected.id}')" ${prog&&prog.watched?'disabled':''}>${prog&&prog.watched?'已完成閱讀':'我已閱讀完成'}</button>`}
           ${admin? `
           <div style="margin-top:10px;">
+            <button class="btn ghost small" onclick="togglePin('${selected.id}')">${selected.pinned?'取消重要標記':'⭐ 設為重要'}</button>
             <button class="btn ghost small" onclick="showEditCourseForm('${selected.id}',false)">編輯資料</button>
             <button class="icon-btn" style="margin-left:10px;" onclick="deleteCourse(this,'${selected.id}')">刪除此文件資料</button>
           </div>` : ''}
@@ -706,7 +711,7 @@ function renderDocuments(){
           const p = userProgress(u.id)[c.id];
           const complete = isCourseComplete(u.id, c.id);
           return `<div class="course-item ${c.id===STATE.selectedCourseId?'selected':''}" onclick="selectCourse('${c.id}')">
-            <div><h4>${escapeHtml(c.title)}</h4><p>${c.materials&&c.materials.length? c.materials.length+' 份文件':''} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''}</p></div>
+            <div><h4>${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${c.materials&&c.materials.length? c.materials.length+' 份文件':''} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''}</p></div>
             <span class="pill ${complete?'ok':(p?'warn':'off')}">${complete?'完成':(p?'待測驗':'未開始')}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無文件資料</div>'}
@@ -878,6 +883,17 @@ async function submitEditCourse(btn, id){
   STATE.courses = latest;
   await saveCourses(STATE.courses);
   document.getElementById('addCourseFormWrap').innerHTML='';
+  render();
+}
+
+async function togglePin(id){
+  let latest;
+  try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); return; }
+  const c = latest.find(x=>x.id===id);
+  if(!c){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); return; }
+  c.pinned = !c.pinned;
+  STATE.courses = latest;
+  await saveCourses(STATE.courses);
   render();
 }
 

@@ -634,7 +634,7 @@ function renderCourses(){
           ${selected.quiz && selected.quiz.length? `<button class="btn ghost small" style="margin-top:10px;" onclick="goToQuiz('${selected.id}')">前往測驗 →</button>`:''}
           ${admin? `
           <div style="margin-top:10px;">
-            <button class="btn ghost small" onclick="togglePin('${selected.id}')">${selected.pinned?'取消重要標記':'⭐ 設為重要'}</button>
+            <button class="btn ghost small" onclick="togglePin(this,'${selected.id}')">${selected.pinned?'取消重要標記':'⭐ 設為重要'}</button>
             <button class="btn ghost small" onclick="showEditCourseForm('${selected.id}',true)">編輯課程</button>
             <button class="icon-btn" style="margin-left:10px;" onclick="deleteCourse(this,'${selected.id}')">刪除此課程</button>
           </div>` : ''}
@@ -697,7 +697,7 @@ function renderDocuments(){
             : `<button class="btn ghost small" style="margin-top:14px;" onclick="markReadComplete(this,'${selected.id}')" ${prog&&prog.watched?'disabled':''}>${prog&&prog.watched?'已完成閱讀':'我已閱讀完成'}</button>`}
           ${admin? `
           <div style="margin-top:10px;">
-            <button class="btn ghost small" onclick="togglePin('${selected.id}')">${selected.pinned?'取消重要標記':'⭐ 設為重要'}</button>
+            <button class="btn ghost small" onclick="togglePin(this,'${selected.id}')">${selected.pinned?'取消重要標記':'⭐ 設為重要'}</button>
             <button class="btn ghost small" onclick="showEditCourseForm('${selected.id}',false)">編輯資料</button>
             <button class="icon-btn" style="margin-left:10px;" onclick="deleteCourse(this,'${selected.id}')">刪除此文件資料</button>
           </div>` : ''}
@@ -886,14 +886,16 @@ async function submitEditCourse(btn, id){
   render();
 }
 
-async function togglePin(id){
+async function togglePin(btn, id){
+  const restore = lockBtn(btn, '處理中...');
   let latest;
-  try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); return; }
+  try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   const c = latest.find(x=>x.id===id);
-  if(!c){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); return; }
+  if(!c){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
   c.pinned = !c.pinned;
   STATE.courses = latest;
   await saveCourses(STATE.courses);
+  alert(c.pinned? '⭐ 已設為重要,將顯示在清單最上方!' : '已取消重要標記。');
   render();
 }
 

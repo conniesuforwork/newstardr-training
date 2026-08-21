@@ -219,7 +219,7 @@ function ytId(url){
 }
 
 /* ---------- App state ---------- */
-let STATE = { view:'dashboard', staff:[], courses:[], progress:{}, currentUserId:null, selectedCourseId:null, quizAnswers:{}, quizResult:null, player:null, adminPassword:'admin123', adminAuthed:false };
+let STATE = { view:'dashboard', staff:[], courses:[], progress:{}, currentUserId:null, selectedCourseId:null, selectedVideoIndex:0, quizAnswers:{}, quizResult:null, player:null, adminPassword:'admin123', adminAuthed:false };
 
 function isInAppBrowser(){
   const ua = navigator.userAgent || '';
@@ -491,6 +491,12 @@ function coursesForStaff(staffObj){
 function sortPinned(list){
   return [...list].sort((a,b)=> (b.pinned?1:0) - (a.pinned?1:0));
 }
+function courseVideos(c){
+  if(!c) return [];
+  if(c.videos && c.videos.length) return c.videos;
+  if(c.videoUrl) return [{name:c.title||'影片', url:c.videoUrl}];
+  return [];
+}
 
 function isCourseComplete(staffId, courseId){
   const course = STATE.courses.find(c=>c.id===courseId);
@@ -597,10 +603,12 @@ function goView(v){
 function renderCourses(){
   const admin = isAdmin();
   const allVisible = admin? STATE.courses : coursesForStaff(currentUser());
-  const visibleCourses = sortPinned(allVisible.filter(c=>c.videoUrl));
+  const visibleCourses = sortPinned(allVisible.filter(c=>courseVideos(c).length>0));
   const selected = visibleCourses.find(c=>c.id===STATE.selectedCourseId) || visibleCourses[0];
   const u = currentUser();
   const prog = selected? userProgress(u.id)[selected.id] : null;
+  const vids = selected? courseVideos(selected) : [];
+  const activeIdx = Math.min(STATE.selectedVideoIndex||0, Math.max(vids.length-1,0));
 
   return `
   <div class="topbar">
@@ -613,6 +621,11 @@ function renderCourses(){
       ${selected? `
         <div class="card">
           <div class="video-wrap"><div id="ytplayer"></div></div>
+          ${vids.length>1? `
+            <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;">
+              ${vids.map((v,i)=>`<button class="btn ${i===activeIdx?'accent':'ghost'} small" onclick="selectVideo(${i})">${escapeHtml(v.name||('影片'+(i+1)))}</button>`).join('')}
+            </div>
+          ` : ''}
           <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:flex-start;">
             <div>
               <h3 style="margin:0 0 6px;">${selected.pinned?'⭐ ':''}${escapeHtml(selected.title)}</h3>
@@ -647,8 +660,9 @@ function renderCourses(){
         ${visibleCourses.map(c=>{
           const p = userProgress(u.id)[c.id];
           const complete = isCourseComplete(u.id, c.id);
+          const vc = courseVideos(c).length;
           return `<div class="course-item ${c.id===STATE.selectedCourseId?'selected':''}" onclick="selectCourse('${c.id}')">
-            <div><h4>${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${p&&p.watched?'已觀看':'未觀看'} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''}</p></div>
+            <div><h4>${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${p&&p.watched?'已觀看':'未觀看'} ${vc>1? '· '+vc+' 支影片':''} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''}</p></div>
             <span class="pill ${complete?'ok':(p?'warn':'off')}">${complete?'完成':(p?'待測驗':'未開始')}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無課程</div>'}
@@ -662,7 +676,7 @@ function renderCourses(){
 function renderDocuments(){
   const admin = isAdmin();
   const allVisible = admin? STATE.courses : coursesForStaff(currentUser());
-  const visibleDocs = sortPinned(allVisible.filter(c=>!c.videoUrl));
+  const visibleDocs = sortPinned(allVisible.filter(c=>courseVideos(c).length===0));
   const selected = visibleDocs.find(c=>c.id===STATE.selectedCourseId) || visibleDocs[0];
   const u = currentUser();
   const prog = selected? userProgress(u.id)[selected.id] : null;
@@ -721,18 +735,25 @@ function renderDocuments(){
   `;
 }
 
-function selectCourse(id){ STATE.selectedCourseId=id; render(); }
+function selectCourse(id){ STATE.selectedCourseId=id; STATE.selectedVideoIndex=0; render(); }
+function selectVideo(idx){ STATE.selectedVideoIndex=idx; render(); }
 
 function courseFormInnerHtml(c, requireVideo){
-  c = c || {title:'', desc:'', videoUrl:''};
+  c = c || {title:'', desc:''};
   const depts = [...new Set(STATE.staff.map(s=>s.dept).filter(Boolean))];
   const targetDepts = c.targetDepts || [];
   return `
     <div class="form-row">
       <input type="text" id="courseFormTitle" placeholder="${requireVideo?'課程名稱':'文件資料名稱'}" value="${escapeHtml(c.title)}">
-      ${requireVideo? `<input type="text" id="courseFormVideo" placeholder="YouTube 影片連結(建議設為不公開)" value="${escapeHtml(c.videoUrl||'')}">` : ''}
     </div>
     <textarea id="courseFormDesc" placeholder="${requireVideo?'課程說明(選填)':'說明(選填)'}">${escapeHtml(c.desc||'')}</textarea>
+    ${requireVideo? `
+    <div class="muted" style="margin:8px 0;">影片(YouTube連結,建議設為不公開,可新增多支)</div>
+    <div id="videoBuilder"></div>
+    <div class="form-row" style="margin-top:4px;margin-bottom:14px;">
+      <button class="btn ghost small" onclick="addVideoRow()">+ 新增影片</button>
+    </div>
+    ` : ''}
     <div class="muted" style="margin:8px 0;">適用部門(不勾選 = 全部人員都需要)</div>
     <div id="deptChecklist" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;">
       ${depts.length? depts.map(d=>`<label style="display:flex;align-items:center;gap:5px;font-size:13px;border:1px solid var(--border);padding:6px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" class="deptCheck" value="${escapeHtml(d)}" ${targetDepts.includes(d)?'checked':''}> ${escapeHtml(d)}</label>`).join('') : '<span class="muted">尚無部門資料,請先在「人員管理」為同仁填寫部門/職稱</span>'}
@@ -750,6 +771,18 @@ function courseFormInnerHtml(c, requireVideo){
   `;
 }
 
+function addVideoRow(prefill){
+  const b = document.getElementById('videoBuilder');
+  const row = document.createElement('div');
+  row.className='form-row';
+  row.innerHTML = `
+    <input type="text" class="videoName" placeholder="影片名稱(例如:前導片、正片)" value="${escapeHtml(prefill? prefill.name:'')}">
+    <input type="text" class="videoUrl2" placeholder="YouTube 影片連結" value="${escapeHtml(prefill? prefill.url:'')}">
+    <button class="icon-btn" onclick="this.parentElement.remove()">移除</button>
+  `;
+  b.appendChild(row);
+}
+
 let __courseFormRequireVideo = true;
 
 function showAddCourseForm(requireVideo){
@@ -765,6 +798,7 @@ function showAddCourseForm(requireVideo){
       </div>
     </div>
   `;
+  if(__courseFormRequireVideo) addVideoRow();
   addQuestionRow();
 }
 
@@ -783,6 +817,10 @@ function showEditCourseForm(id, requireVideo){
       </div>
     </div>
   `;
+  if(__courseFormRequireVideo){
+    const vids = courseVideos(c);
+    (vids.length? vids : [null]).forEach(v=> addVideoRow(v));
+  }
   (c.quiz && c.quiz.length? c.quiz : [null]).forEach(q=> addQuestionRow(q));
   (c.materials || []).forEach(m=> addMaterialRow(m));
   wrap.scrollIntoView({behavior:'smooth'});
@@ -823,10 +861,19 @@ function addMaterialRow(prefill){
 
 function readCourseForm(){
   const title = document.getElementById('courseFormTitle').value.trim();
-  const videoEl = document.getElementById('courseFormVideo');
-  const video = videoEl? videoEl.value.trim() : '';
   const desc = document.getElementById('courseFormDesc').value.trim();
   const targetDepts = Array.from(document.querySelectorAll('.deptCheck:checked')).map(el=>el.value);
+  const videoRows = document.querySelectorAll('#videoBuilder .form-row');
+  const videos = [];
+  let hasInvalidVideo = false;
+  videoRows.forEach(row=>{
+    const name = row.querySelector('.videoName').value.trim();
+    const url = row.querySelector('.videoUrl2').value.trim();
+    if(url){
+      if(ytId(url)) videos.push({name: name || ('影片'+(videos.length+1)), url});
+      else hasInvalidVideo = true;
+    }
+  });
   const qRows = document.querySelectorAll('#qBuilder .quiz-q');
   const quiz = [];
   qRows.forEach(row=>{
@@ -842,7 +889,7 @@ function readCourseForm(){
     const url = row.querySelector('.materialUrl').value.trim();
     if(url) materials.push({name: name || '講義', url});
   });
-  return {title, video, desc, quiz, materials, targetDepts};
+  return {title, desc, videos, hasInvalidVideo, quiz, materials, targetDepts};
 }
 
 function lockBtn(btn, loadingLabel){
@@ -856,10 +903,10 @@ function lockBtn(btn, loadingLabel){
 async function submitNewCourse(btn){
   const f = readCourseForm();
   if(!f.title){ alert(__courseFormRequireVideo? '請填寫課程名稱' : '請填寫文件資料名稱'); return; }
-  if(__courseFormRequireVideo && !ytId(f.video)){ alert('請填寫有效的YouTube影片連結'); return; }
-  if(!__courseFormRequireVideo && f.video){ alert('文件資料不應包含影片連結'); return; }
+  if(f.hasInvalidVideo){ alert('有一支影片的連結格式不正確,請確認是有效的YouTube連結'); return; }
+  if(__courseFormRequireVideo && f.videos.length===0){ alert('請至少新增一支有效的YouTube影片'); return; }
   const restore = lockBtn(btn, '儲存中...');
-  const course = {id:uid(), title:f.title, desc:f.desc, videoUrl:f.video, quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts};
+  const course = {id:uid(), title:f.title, desc:f.desc, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts};
   let latest;
   try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   latest.push(course);
@@ -873,13 +920,16 @@ async function submitNewCourse(btn){
 async function submitEditCourse(btn, id){
   const f = readCourseForm();
   if(!f.title){ alert(__courseFormRequireVideo? '請填寫課程名稱' : '請填寫文件資料名稱'); return; }
-  if(__courseFormRequireVideo && !ytId(f.video)){ alert('請填寫有效的YouTube影片連結'); return; }
+  if(f.hasInvalidVideo){ alert('有一支影片的連結格式不正確,請確認是有效的YouTube連結'); return; }
+  if(__courseFormRequireVideo && f.videos.length===0){ alert('請至少新增一支有效的YouTube影片'); return; }
   const restore = lockBtn(btn, '儲存中...');
   let latest;
   try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   const c = latest.find(x=>x.id===id);
   if(!c){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
-  c.title = f.title; c.desc = f.desc; if(__courseFormRequireVideo) c.videoUrl = f.video; c.quiz = f.quiz; c.materials = f.materials; c.targetDepts = f.targetDepts;
+  c.title = f.title; c.desc = f.desc;
+  if(__courseFormRequireVideo){ c.videos = f.videos; c.videoUrl = f.videos[0]? f.videos[0].url:''; }
+  c.quiz = f.quiz; c.materials = f.materials; c.targetDepts = f.targetDepts;
   STATE.courses = latest;
   await saveCourses(STATE.courses);
   document.getElementById('addCourseFormWrap').innerHTML='';
@@ -937,7 +987,10 @@ function setupPlayer(){
   if(!el) return;
   const selected = STATE.courses.find(c=>c.id===STATE.selectedCourseId);
   if(!selected) return;
-  const vid = ytId(selected.videoUrl);
+  const vids = courseVideos(selected);
+  const activeIdx = Math.min(STATE.selectedVideoIndex||0, Math.max(vids.length-1,0));
+  const vid = vids[activeIdx]? ytId(vids[activeIdx].url) : null;
+  if(!vid) return;
   const start = ()=>{
     STATE.player = new YT.Player('ytplayer', {
       videoId: vid,
@@ -1008,7 +1061,7 @@ function goToQuiz(courseId){
 function goToCourseEdit(courseId){
   STATE.selectedCourseId = courseId;
   const course = STATE.courses.find(c=>c.id===courseId);
-  const targetView = (course && course.videoUrl)? 'courses' : 'documents';
+  const targetView = (course && courseVideos(course).length>0)? 'courses' : 'documents';
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.view===targetView));
   STATE.view = targetView;
   render();

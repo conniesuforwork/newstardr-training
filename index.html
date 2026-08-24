@@ -486,7 +486,14 @@ function currentUser(){ return STATE.staff.find(s=>s.id===STATE.currentUserId) |
 function userProgress(staffId){ return STATE.progress[staffId] || {}; }
 function coursesForStaff(staffObj){
   if(!staffObj) return STATE.courses;
-  return STATE.courses.filter(c=> !c.targetDepts || c.targetDepts.length===0 || c.targetDepts.includes(staffObj.dept));
+  return STATE.courses.filter(c=>{
+    const hasDeptTargets = c.targetDepts && c.targetDepts.length>0;
+    const hasStaffTargets = c.targetStaffIds && c.targetStaffIds.length>0;
+    if(!hasDeptTargets && !hasStaffTargets) return true;
+    const deptMatch = hasDeptTargets && c.targetDepts.includes(staffObj.dept);
+    const staffMatch = hasStaffTargets && c.targetStaffIds.includes(staffObj.id);
+    return deptMatch || staffMatch;
+  });
 }
 function sortPinned(list){
   return [...list].sort((a,b)=> (b.pinned?1:0) - (a.pinned?1:0));
@@ -631,6 +638,7 @@ function renderCourses(){
               <h3 style="margin:0 0 6px;">${selected.pinned?'⭐ ':''}${escapeHtml(selected.title)}</h3>
               <p class="muted" style="max-width:520px;">${escapeHtml(selected.desc||'')}</p>
               ${selected.targetDepts && selected.targetDepts.length? `<p class="muted" style="margin-top:6px;">適用部門:${selected.targetDepts.map(escapeHtml).join('、')}</p>` : ''}
+              ${selected.targetStaffIds && selected.targetStaffIds.length? `<p class="muted" style="margin-top:4px;">適用人員:${selected.targetStaffIds.map(id=>{const s=STATE.staff.find(x=>x.id===id); return s? escapeHtml(s.name): '';}).filter(Boolean).join('、')}</p>` : ''}
             </div>
             <div id="watchedPillWrap">
               ${prog && prog.watched? '<span class="pill ok">已觀看</span>' : '<span class="pill off">尚未觀看</span>'}
@@ -696,6 +704,7 @@ function renderDocuments(){
               <h3 style="margin:0 0 6px;">${selected.pinned?'⭐ ':''}${escapeHtml(selected.title)}</h3>
               <p class="muted" style="max-width:520px;">${escapeHtml(selected.desc||'')}</p>
               ${selected.targetDepts && selected.targetDepts.length? `<p class="muted" style="margin-top:6px;">適用部門:${selected.targetDepts.map(escapeHtml).join('、')}</p>` : ''}
+              ${selected.targetStaffIds && selected.targetStaffIds.length? `<p class="muted" style="margin-top:4px;">適用人員:${selected.targetStaffIds.map(id=>{const s=STATE.staff.find(x=>x.id===id); return s? escapeHtml(s.name): '';}).filter(Boolean).join('、')}</p>` : ''}
             </div>
             <div id="watchedPillWrap">
               ${prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill warn">待測驗</span>':'')}
@@ -742,6 +751,7 @@ function courseFormInnerHtml(c, requireVideo){
   c = c || {title:'', desc:''};
   const depts = [...new Set(STATE.staff.map(s=>s.dept).filter(Boolean))];
   const targetDepts = c.targetDepts || [];
+  const targetStaffIds = c.targetStaffIds || [];
   return `
     <div class="form-row">
       <input type="text" id="courseFormTitle" placeholder="${requireVideo?'課程名稱':'文件資料名稱'}" value="${escapeHtml(c.title)}">
@@ -754,9 +764,13 @@ function courseFormInnerHtml(c, requireVideo){
       <button class="btn ghost small" onclick="addVideoRow()">+ 新增影片</button>
     </div>
     ` : ''}
-    <div class="muted" style="margin:8px 0;">適用部門(不勾選 = 全部人員都需要)</div>
+    <div class="muted" style="margin:8px 0;">適用部門(整個部門都需要;不勾選部門也不勾選人員 = 全部人員都需要)</div>
     <div id="deptChecklist" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;">
       ${depts.length? depts.map(d=>`<label style="display:flex;align-items:center;gap:5px;font-size:13px;border:1px solid var(--border);padding:6px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" class="deptCheck" value="${escapeHtml(d)}" ${targetDepts.includes(d)?'checked':''}> ${escapeHtml(d)}</label>`).join('') : '<span class="muted">尚無部門資料,請先在「人員管理」為同仁填寫部門/職稱</span>'}
+    </div>
+    <div class="muted" style="margin:8px 0;">適用人員(只指定特定人,例如同部門裡的新人)</div>
+    <div id="staffChecklist" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;max-height:180px;overflow-y:auto;padding:4px;">
+      ${STATE.staff.length? STATE.staff.map(s=>`<label style="display:flex;align-items:center;gap:5px;font-size:13px;border:1px solid var(--border);padding:6px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" class="staffCheck" value="${s.id}" ${targetStaffIds.includes(s.id)?'checked':''}> ${escapeHtml(s.name)}${s.dept? '<span class="muted">('+escapeHtml(s.dept)+')</span>':''}</label>`).join('') : '<span class="muted">尚無人員資料</span>'}
     </div>
     <div class="muted" style="margin:8px 0;">${requireVideo?'課程講義':'文件檔案'}(PDF連結,可新增多份)</div>
     <div id="materialBuilder"></div>
@@ -863,6 +877,7 @@ function readCourseForm(){
   const title = document.getElementById('courseFormTitle').value.trim();
   const desc = document.getElementById('courseFormDesc').value.trim();
   const targetDepts = Array.from(document.querySelectorAll('.deptCheck:checked')).map(el=>el.value);
+  const targetStaffIds = Array.from(document.querySelectorAll('.staffCheck:checked')).map(el=>el.value);
   const videoRows = document.querySelectorAll('#videoBuilder .form-row');
   const videos = [];
   let hasInvalidVideo = false;
@@ -889,7 +904,7 @@ function readCourseForm(){
     const url = row.querySelector('.materialUrl').value.trim();
     if(url) materials.push({name: name || '講義', url});
   });
-  return {title, desc, videos, hasInvalidVideo, quiz, materials, targetDepts};
+  return {title, desc, videos, hasInvalidVideo, quiz, materials, targetDepts, targetStaffIds};
 }
 
 function lockBtn(btn, loadingLabel){
@@ -906,7 +921,7 @@ async function submitNewCourse(btn){
   if(f.hasInvalidVideo){ alert('有一支影片的連結格式不正確,請確認是有效的YouTube連結'); return; }
   if(__courseFormRequireVideo && f.videos.length===0){ alert('請至少新增一支有效的YouTube影片'); return; }
   const restore = lockBtn(btn, '儲存中...');
-  const course = {id:uid(), title:f.title, desc:f.desc, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts};
+  const course = {id:uid(), title:f.title, desc:f.desc, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts, targetStaffIds:f.targetStaffIds};
   let latest;
   try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   latest.push(course);
@@ -929,7 +944,7 @@ async function submitEditCourse(btn, id){
   if(!c){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
   c.title = f.title; c.desc = f.desc;
   if(__courseFormRequireVideo){ c.videos = f.videos; c.videoUrl = f.videos[0]? f.videos[0].url:''; }
-  c.quiz = f.quiz; c.materials = f.materials; c.targetDepts = f.targetDepts;
+  c.quiz = f.quiz; c.materials = f.materials; c.targetDepts = f.targetDepts; c.targetStaffIds = f.targetStaffIds;
   STATE.courses = latest;
   await saveCourses(STATE.courses);
   document.getElementById('addCourseFormWrap').innerHTML='';

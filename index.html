@@ -505,11 +505,19 @@ function courseVideos(c){
   return [];
 }
 
+function isQuizExempt(staffObj, course){
+  if(!staffObj || !course) return false;
+  const deptExempt = course.quizExemptDepts && course.quizExemptDepts.includes(staffObj.dept);
+  const staffExempt = course.quizExemptStaffIds && course.quizExemptStaffIds.includes(staffObj.id);
+  return !!(deptExempt || staffExempt);
+}
+
 function isCourseComplete(staffId, courseId){
   const course = STATE.courses.find(c=>c.id===courseId);
   const p = userProgress(staffId)[courseId];
   if(!course) return false;
-  if(course.quiz && course.quiz.length) return !!(p && p.quizPassed);
+  const staffObj = STATE.staff.find(s=>s.id===staffId);
+  if(course.quiz && course.quiz.length && !isQuizExempt(staffObj, course)) return !!(p && p.quizPassed);
   return !!(p && p.watched);
 }
 
@@ -517,7 +525,8 @@ function courseCompletionPct(staffId, courseId){
   const course = STATE.courses.find(c=>c.id===courseId);
   const p = userProgress(staffId)[courseId];
   if(!p) return 0;
-  if(course && course.quiz && course.quiz.length) return p.quizPassed? 100 : 0;
+  const staffObj = STATE.staff.find(s=>s.id===staffId);
+  if(course && course.quiz && course.quiz.length && !isQuizExempt(staffObj, course)) return p.quizPassed? 100 : 0;
   return p.watched? 100 : 0;
 }
 
@@ -616,6 +625,7 @@ function renderCourses(){
   const prog = selected? userProgress(u.id)[selected.id] : null;
   const vids = selected? courseVideos(selected) : [];
   const activeIdx = Math.min(STATE.selectedVideoIndex||0, Math.max(vids.length-1,0));
+  const userExempt = selected? isQuizExempt(u, selected) : false;
 
   return `
   <div class="topbar">
@@ -639,10 +649,11 @@ function renderCourses(){
               <p class="muted" style="max-width:520px;">${escapeHtml(selected.desc||'')}</p>
               ${selected.targetDepts && selected.targetDepts.length? `<p class="muted" style="margin-top:6px;">適用部門:${selected.targetDepts.map(escapeHtml).join('、')}</p>` : ''}
               ${selected.targetStaffIds && selected.targetStaffIds.length? `<p class="muted" style="margin-top:4px;">適用人員:${selected.targetStaffIds.map(id=>{const s=STATE.staff.find(x=>x.id===id); return s? escapeHtml(s.name): '';}).filter(Boolean).join('、')}</p>` : ''}
+              ${userExempt? '<p class="muted" style="margin-top:4px;">您已豁免此堂課測驗,看完影片即算完成。</p>' : ''}
             </div>
             <div id="watchedPillWrap">
               ${prog && prog.watched? '<span class="pill ok">已觀看</span>' : '<span class="pill off">尚未觀看</span>'}
-              ${prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill warn">待測驗</span>':'')}
+              ${!userExempt? (prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill warn">待測驗</span>':'')) : ''}
             </div>
           </div>
           ${selected.materials && selected.materials.length? `
@@ -652,7 +663,7 @@ function renderCourses(){
             </div>
           ` : ''}
           <div class="muted" id="watchTimeLabel" style="margin-top:10px;">累計觀看時間:${Math.floor((prog?.watchSeconds||0)/60)} 分 ${Math.floor((prog?.watchSeconds||0)%60)} 秒</div>
-          ${selected.quiz && selected.quiz.length? `<button class="btn ghost small" style="margin-top:10px;" onclick="goToQuiz('${selected.id}')">前往測驗 →</button>`:''}
+          ${(selected.quiz && selected.quiz.length && !userExempt)? `<button class="btn ghost small" style="margin-top:10px;" onclick="goToQuiz('${selected.id}')">前往測驗 →</button>`:''}
           ${admin? `
           <div style="margin-top:10px;">
             <button class="btn ghost small" onclick="togglePin(this,'${selected.id}')">${selected.pinned?'取消重要標記':'⭐ 設為重要'}</button>
@@ -688,6 +699,7 @@ function renderDocuments(){
   const selected = visibleDocs.find(c=>c.id===STATE.selectedCourseId) || visibleDocs[0];
   const u = currentUser();
   const prog = selected? userProgress(u.id)[selected.id] : null;
+  const userExempt = selected? isQuizExempt(u, selected) : false;
 
   return `
   <div class="topbar">
@@ -705,9 +717,10 @@ function renderDocuments(){
               <p class="muted" style="max-width:520px;">${escapeHtml(selected.desc||'')}</p>
               ${selected.targetDepts && selected.targetDepts.length? `<p class="muted" style="margin-top:6px;">適用部門:${selected.targetDepts.map(escapeHtml).join('、')}</p>` : ''}
               ${selected.targetStaffIds && selected.targetStaffIds.length? `<p class="muted" style="margin-top:4px;">適用人員:${selected.targetStaffIds.map(id=>{const s=STATE.staff.find(x=>x.id===id); return s? escapeHtml(s.name): '';}).filter(Boolean).join('、')}</p>` : ''}
+              ${userExempt? '<p class="muted" style="margin-top:4px;">您已豁免此份資料測驗,看完文件即算完成。</p>' : ''}
             </div>
             <div id="watchedPillWrap">
-              ${prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill warn">待測驗</span>':'')}
+              ${!userExempt? (prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill warn">待測驗</span>':'')) : (prog&&prog.watched? '<span class="pill ok">已完成</span>':'')}
             </div>
           </div>
           ${selected.materials && selected.materials.length? `
@@ -716,7 +729,7 @@ function renderDocuments(){
               ${selected.materials.map(m=>`<div style="margin-bottom:4px;"><a href="${escapeHtml(m.url)}" target="_blank" rel="noopener" class="btn ghost small" style="text-decoration:none;display:inline-block;">📄 ${escapeHtml(m.name||'文件')}</a></div>`).join('')}
             </div>
           ` : '<div class="muted" style="margin-top:14px;">尚未附加任何文件檔案。</div>'}
-          ${selected.quiz && selected.quiz.length? `<button class="btn ghost small" style="margin-top:14px;" onclick="goToQuiz('${selected.id}')">前往測驗 →</button>`
+          ${(selected.quiz && selected.quiz.length && !userExempt)? `<button class="btn ghost small" style="margin-top:14px;" onclick="goToQuiz('${selected.id}')">前往測驗 →</button>`
             : `<button class="btn ghost small" style="margin-top:14px;" onclick="markReadComplete(this,'${selected.id}')" ${prog&&prog.watched?'disabled':''}>${prog&&prog.watched?'已完成閱讀':'我已閱讀完成'}</button>`}
           ${admin? `
           <div style="margin-top:10px;">
@@ -751,6 +764,7 @@ function courseFormInnerHtml(c, requireVideo){
   c = c || {title:'', desc:''};
   const depts = [...new Set(STATE.staff.map(s=>s.dept).filter(Boolean))];
   const targetDepts = c.targetDepts || [];
+  const quizExemptDepts = c.quizExemptDepts || [];
   return `
     <div class="form-row">
       <input type="text" id="courseFormTitle" placeholder="${requireVideo?'課程名稱':'文件資料名稱'}" value="${escapeHtml(c.title)}">
@@ -768,14 +782,13 @@ function courseFormInnerHtml(c, requireVideo){
       ${depts.length? depts.map(d=>`<label style="display:flex;align-items:center;gap:5px;font-size:13px;border:1px solid var(--border);padding:6px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" class="deptCheck" value="${escapeHtml(d)}" ${targetDepts.includes(d)?'checked':''}> ${escapeHtml(d)}</label>`).join('') : '<span class="muted">尚無部門資料,請先在「人員管理」為同仁填寫部門/職稱</span>'}
     </div>
     <div class="muted" style="margin:8px 0;">適用人員(只指定特定人,例如同部門裡的新人)</div>
-    <div class="form-row" style="margin-bottom:8px;">
-      <select id="staffDeptFilterSelect" class="field" onchange="renderStaffChecklist()">
-        <option value="">— 先選部門,才會列出該部門人員 —</option>
-        ${depts.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('')}
-      </select>
+    ${personPickerHtml('target', depts)}
+    <div class="muted" style="margin:8px 0;">測驗豁免部門(這些部門只需看完影片,不需要通過測驗)</div>
+    <div id="quizExemptDeptChecklist" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;">
+      ${depts.length? depts.map(d=>`<label style="display:flex;align-items:center;gap:5px;font-size:13px;border:1px solid var(--border);padding:6px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" class="quizExemptDeptCheck" value="${escapeHtml(d)}" ${quizExemptDepts.includes(d)?'checked':''}> ${escapeHtml(d)}</label>`).join('') : '<span class="muted">尚無部門資料</span>'}
     </div>
-    <div id="staffChecklist" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;max-height:180px;overflow-y:auto;padding:4px;"></div>
-    <div id="staffSelectedSummary" class="muted" style="margin-bottom:14px;"></div>
+    <div class="muted" style="margin:8px 0;">測驗豁免人員(這些人只需看完影片,不需要通過測驗)</div>
+    ${personPickerHtml('exempt', depts)}
     <div class="muted" style="margin:8px 0;">${requireVideo?'課程講義':'文件檔案'}(PDF連結,可新增多份)</div>
     <div id="materialBuilder"></div>
     <div class="form-row" style="margin-top:4px;margin-bottom:14px;">
@@ -789,27 +802,49 @@ function courseFormInnerHtml(c, requireVideo){
   `;
 }
 
-let __courseFormStaffIds = new Set();
+function personPickerHtml(kind, depts){
+  return `
+    <div class="form-row" style="margin-bottom:8px;">
+      <select id="${kind}DeptFilterSelect" class="field" onchange="renderPersonChecklist('${kind}')">
+        <option value="">— 先選部門,才會列出該部門人員 —</option>
+        ${depts.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('')}
+      </select>
+    </div>
+    <div id="${kind}Checklist" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;max-height:180px;overflow-y:auto;padding:4px;"></div>
+    <div id="${kind}SelectedSummary" class="muted" style="margin-bottom:14px;"></div>
+  `;
+}
 
-function renderStaffChecklist(){
-  const filterVal = document.getElementById('staffDeptFilterSelect').value;
-  const container = document.getElementById('staffChecklist');
+let __courseFormStaffIds = new Set();
+let __courseFormQuizExemptIds = new Set();
+
+function personSet(kind){ return kind==='exempt'? __courseFormQuizExemptIds : __courseFormStaffIds; }
+
+function renderPersonChecklist(kind){
+  const filterEl = document.getElementById(kind+'DeptFilterSelect');
+  if(!filterEl) return;
+  const filterVal = filterEl.value;
+  const container = document.getElementById(kind+'Checklist');
+  const set = personSet(kind);
   const filtered = filterVal? STATE.staff.filter(s=>s.dept===filterVal) : [];
   container.innerHTML = filtered.length
-    ? filtered.map(s=>`<label style="display:flex;align-items:center;gap:5px;font-size:13px;border:1px solid var(--border);padding:6px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" onchange="toggleStaffCheck('${s.id}', this.checked)" ${__courseFormStaffIds.has(s.id)?'checked':''}> ${escapeHtml(s.name)}</label>`).join('')
+    ? filtered.map(s=>`<label style="display:flex;align-items:center;gap:5px;font-size:13px;border:1px solid var(--border);padding:6px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" onchange="togglePersonCheck('${kind}','${s.id}', this.checked)" ${set.has(s.id)?'checked':''}> ${escapeHtml(s.name)}</label>`).join('')
     : (filterVal? '<span class="muted">此部門尚無人員</span>' : '<span class="muted">請先在上方選擇部門</span>');
-  renderStaffSummary();
+  renderPersonSummary(kind);
 }
-function toggleStaffCheck(id, checked){
-  if(checked) __courseFormStaffIds.add(id); else __courseFormStaffIds.delete(id);
-  renderStaffSummary();
+function togglePersonCheck(kind, id, checked){
+  const set = personSet(kind);
+  if(checked) set.add(id); else set.delete(id);
+  renderPersonSummary(kind);
 }
-function renderStaffSummary(){
-  const el = document.getElementById('staffSelectedSummary');
+function renderPersonSummary(kind){
+  const el = document.getElementById(kind+'SelectedSummary');
   if(!el) return;
-  if(__courseFormStaffIds.size===0){ el.textContent = '目前尚未指定任何人員。'; return; }
-  const names = Array.from(__courseFormStaffIds).map(id=>{ const s=STATE.staff.find(x=>x.id===id); return s? s.name : null; }).filter(Boolean);
-  el.textContent = '已選擇('+names.length+'):'+names.join('、');
+  const set = personSet(kind);
+  const emptyText = kind==='exempt'? '目前沒有人豁免測驗。' : '目前尚未指定任何人員。';
+  if(set.size===0){ el.textContent = emptyText; return; }
+  const names = Array.from(set).map(id=>{ const s=STATE.staff.find(x=>x.id===id); return s? s.name : null; }).filter(Boolean);
+  el.textContent = (kind==='exempt'? '已豁免(':'已選擇(')+names.length+'):'+names.join('、');
 }
 
 function addVideoRow(prefill){
@@ -829,6 +864,7 @@ let __courseFormRequireVideo = true;
 function showAddCourseForm(requireVideo){
   __courseFormRequireVideo = (requireVideo!==false);
   __courseFormStaffIds = new Set();
+  __courseFormQuizExemptIds = new Set();
   const wrap = document.getElementById('addCourseFormWrap');
   wrap.innerHTML = `
     <div class="card" style="margin-bottom:16px;">
@@ -842,7 +878,8 @@ function showAddCourseForm(requireVideo){
   `;
   if(__courseFormRequireVideo) addVideoRow();
   addQuestionRow();
-  renderStaffChecklist();
+  renderPersonChecklist('target');
+  renderPersonChecklist('exempt');
 }
 
 function showEditCourseForm(id, requireVideo){
@@ -850,6 +887,7 @@ function showEditCourseForm(id, requireVideo){
   const c = STATE.courses.find(x=>x.id===id);
   if(!c) return;
   __courseFormStaffIds = new Set(c.targetStaffIds || []);
+  __courseFormQuizExemptIds = new Set(c.quizExemptStaffIds || []);
   const wrap = document.getElementById('addCourseFormWrap');
   wrap.innerHTML = `
     <div class="card" style="margin-bottom:16px;">
@@ -867,7 +905,8 @@ function showEditCourseForm(id, requireVideo){
   }
   (c.quiz && c.quiz.length? c.quiz : [null]).forEach(q=> addQuestionRow(q));
   (c.materials || []).forEach(m=> addMaterialRow(m));
-  renderStaffChecklist();
+  renderPersonChecklist('target');
+  renderPersonChecklist('exempt');
   wrap.scrollIntoView({behavior:'smooth'});
 }
 
@@ -909,6 +948,8 @@ function readCourseForm(){
   const desc = document.getElementById('courseFormDesc').value.trim();
   const targetDepts = Array.from(document.querySelectorAll('.deptCheck:checked')).map(el=>el.value);
   const targetStaffIds = Array.from(__courseFormStaffIds);
+  const quizExemptDepts = Array.from(document.querySelectorAll('.quizExemptDeptCheck:checked')).map(el=>el.value);
+  const quizExemptStaffIds = Array.from(__courseFormQuizExemptIds);
   const videoRows = document.querySelectorAll('#videoBuilder .form-row');
   const videos = [];
   let hasInvalidVideo = false;
@@ -935,7 +976,7 @@ function readCourseForm(){
     const url = row.querySelector('.materialUrl').value.trim();
     if(url) materials.push({name: name || '講義', url});
   });
-  return {title, desc, videos, hasInvalidVideo, quiz, materials, targetDepts, targetStaffIds};
+  return {title, desc, videos, hasInvalidVideo, quiz, materials, targetDepts, targetStaffIds, quizExemptDepts, quizExemptStaffIds};
 }
 
 function lockBtn(btn, loadingLabel){
@@ -952,7 +993,7 @@ async function submitNewCourse(btn){
   if(f.hasInvalidVideo){ alert('有一支影片的連結格式不正確,請確認是有效的YouTube連結'); return; }
   if(__courseFormRequireVideo && f.videos.length===0){ alert('請至少新增一支有效的YouTube影片'); return; }
   const restore = lockBtn(btn, '儲存中...');
-  const course = {id:uid(), title:f.title, desc:f.desc, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts, targetStaffIds:f.targetStaffIds};
+  const course = {id:uid(), title:f.title, desc:f.desc, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts, targetStaffIds:f.targetStaffIds, quizExemptDepts:f.quizExemptDepts, quizExemptStaffIds:f.quizExemptStaffIds};
   let latest;
   try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   latest.push(course);
@@ -976,6 +1017,7 @@ async function submitEditCourse(btn, id){
   c.title = f.title; c.desc = f.desc;
   if(__courseFormRequireVideo){ c.videos = f.videos; c.videoUrl = f.videos[0]? f.videos[0].url:''; }
   c.quiz = f.quiz; c.materials = f.materials; c.targetDepts = f.targetDepts; c.targetStaffIds = f.targetStaffIds;
+  c.quizExemptDepts = f.quizExemptDepts; c.quizExemptStaffIds = f.quizExemptStaffIds;
   STATE.courses = latest;
   await saveCourses(STATE.courses);
   document.getElementById('addCourseFormWrap').innerHTML='';
@@ -1117,8 +1159,9 @@ function goToCourseEdit(courseId){
 /* ---------- Quiz ---------- */
 function renderQuiz(){
   const u = currentUser();
-  const scopedCourses = isAdmin()? STATE.courses : coursesForStaff(u);
-  const withQuiz = scopedCourses.filter(c=>c.quiz && c.quiz.length);
+  const admin = isAdmin();
+  const scopedCourses = admin? STATE.courses : coursesForStaff(u);
+  const withQuiz = scopedCourses.filter(c=>c.quiz && c.quiz.length && (admin || !isQuizExempt(u, c)));
   const selected = withQuiz.find(c=>c.id===STATE.selectedCourseId) || withQuiz[0];
 
   return `

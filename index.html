@@ -465,6 +465,7 @@ async function attemptLogin(){
   STATE.adminAuthed = (staffObj.role==='admin');
   STATE.quizResult = null;
   STATE.quizAnswers = {};
+  recordLastLogin(staffObj.id);
   if(!isAdmin() && ['dashboard','staff','reports'].includes(STATE.view)) STATE.view = 'courses';
   hideLoginGate();
   bindNav();
@@ -484,6 +485,21 @@ function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':
 
 function currentUser(){ return STATE.staff.find(s=>s.id===STATE.currentUserId) || STATE.staff[0]; }
 function userProgress(staffId){ return STATE.progress[staffId] || {}; }
+function fmtTime(iso){
+  if(!iso) return '-';
+  const d = new Date(iso);
+  if(isNaN(d.getTime())) return '-';
+  return (d.getMonth()+1)+'/'+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+}
+async function recordLastLogin(staffId){
+  try{
+    const latest = await loadProgress();
+    if(!latest[staffId]) latest[staffId] = {};
+    latest[staffId]._lastLogin = new Date().toISOString();
+    STATE.progress = latest;
+    await saveProgress(STATE.progress);
+  }catch(e){ console.error('記錄登入時間失敗', e); }
+}
 function coursesForStaff(staffObj){
   if(!staffObj) return STATE.courses;
   return STATE.courses.filter(c=>{
@@ -512,7 +528,7 @@ function courseRosterTableHtml(course, watchedLabel){
     <div class="card" style="margin-top:20px;">
       <div class="section-title" style="margin-top:0;">課程名單:${escapeHtml(course.title)}</div>
       <table>
-        <thead><tr><th>姓名</th><th>部門</th><th>${watchedLabel}</th><th>測驗狀態</th><th>完成</th></tr></thead>
+        <thead><tr><th>姓名</th><th>部門</th><th>${watchedLabel}</th><th>${watchedLabel}時間</th><th>測驗狀態</th><th>測驗時間</th><th>完成</th></tr></thead>
         <tbody>
           ${roster.map(s=>{
             const p = userProgress(s.id)[course.id];
@@ -528,10 +544,12 @@ function courseRosterTableHtml(course, watchedLabel){
               <td>${escapeHtml(s.name)}</td>
               <td>${escapeHtml(s.dept||'-')}</td>
               <td>${p&&p.watched? '<span class="pill ok">已'+watchedLabel+'</span>':'<span class="pill off">未'+watchedLabel+'</span>'}</td>
+              <td class="muted">${fmtTime(p&&p.lastWatchedAt)}</td>
               <td>${quizStatus}</td>
+              <td class="muted">${fmtTime(p&&p.quizSubmittedAt)}</td>
               <td><span class="pill ${complete?'ok':'off'}">${complete?'完成':'未完成'}</span></td>
             </tr>`;
-          }).join('') || `<tr><td colspan="5" class="empty">目前沒有人被指派這堂課</td></tr>`}
+          }).join('') || `<tr><td colspan="7" class="empty">目前沒有人被指派這堂課</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -1108,6 +1126,7 @@ async function markReadComplete(btn, courseId){
   if(!latest[u.id]) latest[u.id] = {};
   if(!latest[u.id][courseId]) latest[u.id][courseId] = {watchSeconds:0, watched:false, quizPassed:false};
   latest[u.id][courseId].watched = true;
+  latest[u.id][courseId].lastWatchedAt = new Date().toISOString();
   STATE.progress = latest;
   await saveProgress(STATE.progress);
   alert('✓ 已標記為完成閱讀!');
@@ -1157,6 +1176,7 @@ async function addWatchSeconds(sec, forceWatched){
   if(!latest[u.id]) latest[u.id] = {};
   if(!latest[u.id][cid]) latest[u.id][cid] = {watchSeconds:0, watched:false, quizPassed:false};
   latest[u.id][cid].watchSeconds = (latest[u.id][cid].watchSeconds||0) + sec;
+  latest[u.id][cid].lastWatchedAt = new Date().toISOString();
   const justWatched = !latest[u.id][cid].watched && (latest[u.id][cid].watchSeconds >= 20 || forceWatched);
   if(latest[u.id][cid].watchSeconds >= 20 || forceWatched) latest[u.id][cid].watched = true;
   STATE.progress = latest;
@@ -1295,6 +1315,7 @@ async function submitQuiz(btn, courseId){
   if(!latest[u.id][courseId]) latest[u.id][courseId] = {watchSeconds:0, watched:false, quizPassed:false};
   latest[u.id][courseId].quizScore = score;
   latest[u.id][courseId].quizPassed = passed;
+  latest[u.id][courseId].quizSubmittedAt = new Date().toISOString();
   STATE.progress = latest;
   await saveProgress(STATE.progress);
   STATE.quizResult = {courseId, correct, total, score, passed, details};
@@ -1312,7 +1333,7 @@ function renderStaff(){
   <div class="card">
     <div class="muted" style="margin-bottom:12px;">每位管理員的密碼各自獨立,可在下方點「編輯」個別設定或修改。</div>
     <table>
-      <thead><tr><th>姓名</th><th>部門/職稱</th><th>Email</th><th>身分</th><th>整體完成率</th><th></th></tr></thead>
+      <thead><tr><th>姓名</th><th>部門/職稱</th><th>Email</th><th>身分</th><th>最後登入</th><th>整體完成率</th><th></th></tr></thead>
       <tbody>
         ${STATE.staff.map(s=>{
           const myCourses = coursesForStaff(s);
@@ -1320,11 +1341,13 @@ function renderStaff(){
           let done=0;
           myCourses.forEach(c=>{ if(isCourseComplete(s.id, c.id)) done++; });
           const pct = total? Math.round(done/total*100):0;
+          const lastLogin = userProgress(s.id)._lastLogin;
           return `<tr>
             <td>${escapeHtml(s.name)}</td>
             <td>${escapeHtml(s.dept||'-')}</td>
             <td>${escapeHtml(s.email||'-')}</td>
             <td><span class="pill ${s.role==='admin'?'warn':'off'}">${s.role==='admin'?'管理員':'一般人員'}</span></td>
+            <td class="muted">${fmtTime(lastLogin)}</td>
             <td><span class="pill ${pct>=100?'ok':(pct>0?'warn':'off')}">${pct}%</span></td>
             <td><button class="icon-btn" onclick="showEditStaffForm('${s.id}')">編輯</button> <button class="icon-btn" onclick="deleteStaff(this,'${s.id}')">刪除</button></td>
           </tr>`;

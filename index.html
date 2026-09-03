@@ -495,6 +495,48 @@ function coursesForStaff(staffObj){
     return deptMatch || staffMatch;
   });
 }
+function staffForCourse(course){
+  if(!course) return [];
+  const hasDeptTargets = course.targetDepts && course.targetDepts.length>0;
+  const hasStaffTargets = course.targetStaffIds && course.targetStaffIds.length>0;
+  if(!hasDeptTargets && !hasStaffTargets) return STATE.staff;
+  return STATE.staff.filter(s=>{
+    const deptMatch = hasDeptTargets && course.targetDepts.includes(s.dept);
+    const staffMatch = hasStaffTargets && course.targetStaffIds.includes(s.id);
+    return deptMatch || staffMatch;
+  });
+}
+function courseRosterTableHtml(course, watchedLabel){
+  const roster = staffForCourse(course);
+  return `
+    <div class="card" style="margin-top:20px;">
+      <div class="section-title" style="margin-top:0;">課程名單:${escapeHtml(course.title)}</div>
+      <table>
+        <thead><tr><th>姓名</th><th>部門</th><th>${watchedLabel}</th><th>測驗狀態</th><th>完成</th></tr></thead>
+        <tbody>
+          ${roster.map(s=>{
+            const p = userProgress(s.id)[course.id];
+            const exempt = isQuizExempt(s, course);
+            let quizStatus;
+            if(!course.quiz || !course.quiz.length) quizStatus = '<span class="muted">無測驗</span>';
+            else if(exempt) quizStatus = '<span class="pill off">已豁免</span>';
+            else if(p && p.quizPassed) quizStatus = `<span class="pill ok">已通過(${p.quizScore}分)</span>`;
+            else if(p && typeof p.quizScore==='number') quizStatus = `<span class="pill warn">未通過(${p.quizScore}分)</span>`;
+            else quizStatus = '<span class="pill off">未測驗</span>';
+            const complete = isCourseComplete(s.id, course.id);
+            return `<tr>
+              <td>${escapeHtml(s.name)}</td>
+              <td>${escapeHtml(s.dept||'-')}</td>
+              <td>${p&&p.watched? '<span class="pill ok">已'+watchedLabel+'</span>':'<span class="pill off">未'+watchedLabel+'</span>'}</td>
+              <td>${quizStatus}</td>
+              <td><span class="pill ${complete?'ok':'off'}">${complete?'完成':'未完成'}</span></td>
+            </tr>`;
+          }).join('') || `<tr><td colspan="5" class="empty">目前沒有人被指派這堂課</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
 function sortPinned(list){
   return [...list].sort((a,b)=> (b.pinned?1:0) - (a.pinned?1:0));
 }
@@ -688,6 +730,7 @@ function renderCourses(){
       </div>
     </div>
   </div>
+  ${(admin && selected)? courseRosterTableHtml(selected, '觀看') : ''}
   `;
 }
 
@@ -754,6 +797,7 @@ function renderDocuments(){
       </div>
     </div>
   </div>
+  ${(admin && selected)? courseRosterTableHtml(selected, '閱讀') : ''}
   `;
 }
 

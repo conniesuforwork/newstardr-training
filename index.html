@@ -574,8 +574,9 @@ function isQuizExempt(staffObj, course){
 
 function isCourseComplete(staffId, courseId){
   const course = STATE.courses.find(c=>c.id===courseId);
-  const p = userProgress(staffId)[courseId];
   if(!course) return false;
+  if(course.referenceOnly) return true;
+  const p = userProgress(staffId)[courseId];
   const staffObj = STATE.staff.find(s=>s.id===staffId);
   if(course.quiz && course.quiz.length && !isQuizExempt(staffObj, course)) return !!(p && p.quizPassed);
   return !!(p && p.watched);
@@ -583,6 +584,7 @@ function isCourseComplete(staffId, courseId){
 
 function courseCompletionPct(staffId, courseId){
   const course = STATE.courses.find(c=>c.id===courseId);
+  if(course && course.referenceOnly) return 100;
   const p = userProgress(staffId)[courseId];
   if(!p) return 0;
   const staffObj = STATE.staff.find(s=>s.id===staffId);
@@ -710,10 +712,11 @@ function renderCourses(){
               ${selected.targetDepts && selected.targetDepts.length? `<p class="muted" style="margin-top:6px;">適用部門:${selected.targetDepts.map(escapeHtml).join('、')}</p>` : ''}
               ${selected.targetStaffIds && selected.targetStaffIds.length? `<p class="muted" style="margin-top:4px;">適用人員:${selected.targetStaffIds.map(id=>{const s=STATE.staff.find(x=>x.id===id); return s? escapeHtml(s.name): '';}).filter(Boolean).join('、')}</p>` : ''}
               ${userExempt? '<p class="muted" style="margin-top:4px;">您已豁免此堂課測驗,看完影片即算完成。</p>' : ''}
+              ${selected.referenceOnly? '<p class="muted" style="margin-top:4px;">📌 僅供參考資料,不強制要求完成。</p>' : ''}
             </div>
             <div id="watchedPillWrap">
-              ${prog && prog.watched? '<span class="pill ok">已觀看</span>' : '<span class="pill off">尚未觀看</span>'}
-              ${!userExempt? (prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill warn">待測驗</span>':'')) : ''}
+              ${selected.referenceOnly? '<span class="pill off">參考資料</span>' : (prog && prog.watched? '<span class="pill ok">已觀看</span>' : '<span class="pill off">尚未觀看</span>')}
+              ${(!userExempt && !selected.referenceOnly)? (prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill warn">待測驗</span>':'')) : ''}
             </div>
           </div>
           ${selected.materials && selected.materials.length? `
@@ -723,7 +726,7 @@ function renderCourses(){
             </div>
           ` : ''}
           <div class="muted" id="watchTimeLabel" style="margin-top:10px;">累計觀看時間:${Math.floor((prog?.watchSeconds||0)/60)} 分 ${Math.floor((prog?.watchSeconds||0)%60)} 秒</div>
-          ${(selected.quiz && selected.quiz.length && !userExempt)? `<button class="btn ghost small" style="margin-top:10px;" onclick="goToQuiz('${selected.id}')">前往測驗 →</button>`:''}
+          ${(selected.quiz && selected.quiz.length && !userExempt && !selected.referenceOnly)? `<button class="btn ghost small" style="margin-top:10px;" onclick="goToQuiz('${selected.id}')">前往測驗 →</button>`:''}
           ${admin? `
           <div style="margin-top:10px;">
             <button class="btn ghost small" onclick="togglePin(this,'${selected.id}')">${selected.pinned?'取消重要標記':'⭐ 設為重要'}</button>
@@ -779,9 +782,10 @@ function renderDocuments(){
               ${selected.targetDepts && selected.targetDepts.length? `<p class="muted" style="margin-top:6px;">適用部門:${selected.targetDepts.map(escapeHtml).join('、')}</p>` : ''}
               ${selected.targetStaffIds && selected.targetStaffIds.length? `<p class="muted" style="margin-top:4px;">適用人員:${selected.targetStaffIds.map(id=>{const s=STATE.staff.find(x=>x.id===id); return s? escapeHtml(s.name): '';}).filter(Boolean).join('、')}</p>` : ''}
               ${userExempt? '<p class="muted" style="margin-top:4px;">您已豁免此份資料測驗,看完文件即算完成。</p>' : ''}
+              ${selected.referenceOnly? '<p class="muted" style="margin-top:4px;">📌 僅供參考資料,不強制要求完成。</p>' : ''}
             </div>
             <div id="watchedPillWrap">
-              ${!userExempt? (prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill warn">待測驗</span>':'')) : (prog&&prog.watched? '<span class="pill ok">已完成</span>':'')}
+              ${selected.referenceOnly? '<span class="pill off">參考資料</span>' : (!userExempt? (prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill warn">待測驗</span>':'')) : (prog&&prog.watched? '<span class="pill ok">已完成</span>':''))}
             </div>
           </div>
           ${selected.materials && selected.materials.length? `
@@ -790,8 +794,8 @@ function renderDocuments(){
               ${selected.materials.map(m=>`<div style="margin-bottom:4px;"><a href="${escapeHtml(m.url)}" target="_blank" rel="noopener" class="btn ghost small" style="text-decoration:none;display:inline-block;">📄 ${escapeHtml(m.name||'文件')}</a></div>`).join('')}
             </div>
           ` : '<div class="muted" style="margin-top:14px;">尚未附加任何文件檔案。</div>'}
-          ${(selected.quiz && selected.quiz.length && !userExempt)? `<button class="btn ghost small" style="margin-top:14px;" onclick="goToQuiz('${selected.id}')">前往測驗 →</button>`
-            : `<button class="btn ghost small" style="margin-top:14px;" onclick="markReadComplete(this,'${selected.id}')" ${prog&&prog.watched?'disabled':''}>${prog&&prog.watched?'已完成閱讀':'我已閱讀完成'}</button>`}
+          ${selected.referenceOnly? '' : ((selected.quiz && selected.quiz.length && !userExempt)? `<button class="btn ghost small" style="margin-top:14px;" onclick="goToQuiz('${selected.id}')">前往測驗 →</button>`
+            : `<button class="btn ghost small" style="margin-top:14px;" onclick="markReadComplete(this,'${selected.id}')" ${prog&&prog.watched?'disabled':''}>${prog&&prog.watched?'已完成閱讀':'我已閱讀完成'}</button>`)}
           ${admin? `
           <div style="margin-top:10px;">
             <button class="btn ghost small" onclick="togglePin(this,'${selected.id}')">${selected.pinned?'取消重要標記':'⭐ 設為重要'}</button>
@@ -832,8 +836,12 @@ function courseFormInnerHtml(c, requireVideo){
       <input type="text" id="courseFormTitle" placeholder="${requireVideo?'課程名稱':'文件資料名稱'}" value="${escapeHtml(c.title)}">
     </div>
     <textarea id="courseFormDesc" placeholder="${requireVideo?'課程說明(選填)':'說明(選填)'}">${escapeHtml(c.desc||'')}</textarea>
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:14px;cursor:pointer;background:var(--accent-soft);padding:8px 12px;border-radius:8px;">
+      <input type="checkbox" id="courseFormReferenceOnly" ${c.referenceOnly?'checked':''}>
+      僅供參考資料(不強制要求任何人完成,不會出現在待辦名單或計入完成率)
+    </label>
     ${requireVideo? `
-    <div class="muted" style="margin:8px 0;">影片(YouTube連結,建議設為不公開,可新增多支)</div>
+    <div class="muted" style="margin:8px 0;">影片(YouTube連結,建議設為不公開,可新增多支;純文字/文件也可以不放影片)</div>
     <div id="videoBuilder"></div>
     <div class="form-row" style="margin-top:4px;margin-bottom:14px;">
       <button class="btn ghost small" onclick="addVideoRow()">+ 新增影片</button>
@@ -1008,6 +1016,7 @@ function addMaterialRow(prefill){
 function readCourseForm(){
   const title = document.getElementById('courseFormTitle').value.trim();
   const desc = document.getElementById('courseFormDesc').value.trim();
+  const referenceOnly = document.getElementById('courseFormReferenceOnly').checked;
   const targetDepts = Array.from(document.querySelectorAll('.deptCheck:checked')).map(el=>el.value);
   const targetStaffIds = Array.from(__courseFormStaffIds);
   const quizExemptDepts = Array.from(document.querySelectorAll('.quizExemptDeptCheck:checked')).map(el=>el.value);
@@ -1038,7 +1047,7 @@ function readCourseForm(){
     const url = row.querySelector('.materialUrl').value.trim();
     if(url) materials.push({name: name || '講義', url});
   });
-  return {title, desc, videos, hasInvalidVideo, quiz, materials, targetDepts, targetStaffIds, quizExemptDepts, quizExemptStaffIds};
+  return {title, desc, referenceOnly, videos, hasInvalidVideo, quiz, materials, targetDepts, targetStaffIds, quizExemptDepts, quizExemptStaffIds};
 }
 
 function lockBtn(btn, loadingLabel){
@@ -1053,9 +1062,9 @@ async function submitNewCourse(btn){
   const f = readCourseForm();
   if(!f.title){ alert(__courseFormRequireVideo? '請填寫課程名稱' : '請填寫文件資料名稱'); return; }
   if(f.hasInvalidVideo){ alert('有一支影片的連結格式不正確,請確認是有效的YouTube連結'); return; }
-  if(__courseFormRequireVideo && f.videos.length===0){ alert('請至少新增一支有效的YouTube影片'); return; }
+  if(__courseFormRequireVideo && !f.referenceOnly && f.videos.length===0){ alert('請至少新增一支有效的YouTube影片,或勾選「僅供參考資料」'); return; }
   const restore = lockBtn(btn, '儲存中...');
-  const course = {id:uid(), title:f.title, desc:f.desc, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts, targetStaffIds:f.targetStaffIds, quizExemptDepts:f.quizExemptDepts, quizExemptStaffIds:f.quizExemptStaffIds};
+  const course = {id:uid(), title:f.title, desc:f.desc, referenceOnly:f.referenceOnly, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts, targetStaffIds:f.targetStaffIds, quizExemptDepts:f.quizExemptDepts, quizExemptStaffIds:f.quizExemptStaffIds};
   let latest;
   try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   latest.push(course);
@@ -1070,13 +1079,13 @@ async function submitEditCourse(btn, id){
   const f = readCourseForm();
   if(!f.title){ alert(__courseFormRequireVideo? '請填寫課程名稱' : '請填寫文件資料名稱'); return; }
   if(f.hasInvalidVideo){ alert('有一支影片的連結格式不正確,請確認是有效的YouTube連結'); return; }
-  if(__courseFormRequireVideo && f.videos.length===0){ alert('請至少新增一支有效的YouTube影片'); return; }
+  if(__courseFormRequireVideo && !f.referenceOnly && f.videos.length===0){ alert('請至少新增一支有效的YouTube影片,或勾選「僅供參考資料」'); return; }
   const restore = lockBtn(btn, '儲存中...');
   let latest;
   try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   const c = latest.find(x=>x.id===id);
   if(!c){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
-  c.title = f.title; c.desc = f.desc;
+  c.title = f.title; c.desc = f.desc; c.referenceOnly = f.referenceOnly;
   if(__courseFormRequireVideo){ c.videos = f.videos; c.videoUrl = f.videos[0]? f.videos[0].url:''; }
   c.quiz = f.quiz; c.materials = f.materials; c.targetDepts = f.targetDepts; c.targetStaffIds = f.targetStaffIds;
   c.quizExemptDepts = f.quizExemptDepts; c.quizExemptStaffIds = f.quizExemptStaffIds;

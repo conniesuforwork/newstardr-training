@@ -730,7 +730,7 @@ function renderCourses(){
       </div>
     </div>
   </div>
-  ${(admin && selected)? courseRosterTableHtml(selected, '觀看') : ''}
+  ${((admin || (u && u.canViewRoster)) && selected)? courseRosterTableHtml(selected, '觀看') : ''}
   `;
 }
 
@@ -797,7 +797,7 @@ function renderDocuments(){
       </div>
     </div>
   </div>
-  ${(admin && selected)? courseRosterTableHtml(selected, '閱讀') : ''}
+  ${((admin || (u && u.canViewRoster)) && selected)? courseRosterTableHtml(selected, '閱讀') : ''}
   `;
 }
 
@@ -1349,6 +1349,10 @@ function staffFormHtml(s){
     <div id="staffFormPasswordWrap" style="display:${s.role==='admin'?'':'none'};margin-bottom:10px;">
       <input type="password" id="staffFormPassword" class="field" style="width:100%;" placeholder="${s.password? '管理員密碼(留空 = 不更動)' : '設定此管理員的專屬密碼'}">
     </div>
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:14px;cursor:pointer;">
+      <input type="checkbox" id="staffFormCanViewRoster" ${s.canViewRoster?'checked':''}>
+      允許查看課程名單(可看到每堂課誰看過、誰測驗過,不需要完整管理員權限)
+    </label>
   `;
 }
 function toggleStaffPasswordField(){
@@ -1391,7 +1395,8 @@ function readStaffForm(){
   const email = document.getElementById('staffFormEmail').value.trim();
   const role = document.getElementById('staffFormRole').value;
   const password = document.getElementById('staffFormPassword')? document.getElementById('staffFormPassword').value : '';
-  return {name, dept, email, role, password};
+  const canViewRoster = document.getElementById('staffFormCanViewRoster').checked;
+  return {name, dept, email, role, password, canViewRoster};
 }
 async function submitNewStaff(btn){
   const f = readStaffForm();
@@ -1401,7 +1406,7 @@ async function submitNewStaff(btn){
   const restore = lockBtn(btn, '儲存中...');
   let latest;
   try{ latest = await loadStaff(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
-  const newStaff = {id:uid(), name:f.name, dept:f.dept, email:f.email, role:f.role};
+  const newStaff = {id:uid(), name:f.name, dept:f.dept, email:f.email, role:f.role, canViewRoster:f.canViewRoster};
   if(f.role==='admin') newStaff.password = f.password;
   latest.push(newStaff);
   STATE.staff = latest;
@@ -1419,7 +1424,7 @@ async function submitEditStaff(btn, id){
   try{ latest = await loadStaff(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   const s = latest.find(x=>x.id===id);
   if(!s){ alert('找不到這位人員,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
-  s.name = f.name; s.dept = f.dept; s.email = f.email; s.role = f.role;
+  s.name = f.name; s.dept = f.dept; s.email = f.email; s.role = f.role; s.canViewRoster = f.canViewRoster;
   if(f.role==='admin'){
     if(f.password) s.password = f.password;
     else if(!s.password){ alert('請為這位管理員設定專屬密碼'); restore(); return; }

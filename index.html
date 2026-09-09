@@ -420,14 +420,29 @@ function updateLoginUserOptions(){
   sel.innerHTML = matching.map(s=>`<option value="${s.id}" ${s.id===STATE.currentUserId?'selected':''}>${escapeHtml(s.name)}</option>`).join('');
 }
 
+function isDeviceTrusted(staffId){ return storageGet('lms-trusted-'+staffId, false) === true; }
+function setDeviceTrusted(staffId, trusted){ storageSet('lms-trusted-'+staffId, trusted); }
+function forgetDevice(staffId){ setDeviceTrusted(staffId, false); updateLoginFieldsVisibility(); }
+
 function updateLoginFieldsVisibility(){
   const sel = document.getElementById('loginUserSelect');
   const staffObj = STATE.staff.find(s=>s.id===sel.value);
   const emailWrap = document.getElementById('loginEmailWrap');
   const pwWrap = document.getElementById('loginPasswordWrap');
-  emailWrap.innerHTML = (staffObj && staffObj.email)
-    ? `<label class="login-label">請輸入您的Email以驗證身分</label><input type="email" id="loginEmailInput" class="field" style="width:100%;" placeholder="您的Email">`
-    : '';
+  const trusted = staffObj? isDeviceTrusted(staffObj.id) : false;
+  if(staffObj && staffObj.email && !trusted){
+    emailWrap.innerHTML = `
+      <label class="login-label">請輸入您的Email以驗證身分</label>
+      <input type="email" id="loginEmailInput" class="field" style="width:100%;" placeholder="您的Email">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:8px;cursor:pointer;color:var(--sub);">
+        <input type="checkbox" id="loginRememberDevice"> 記住這台裝置(下次免輸入Email)
+      </label>
+    `;
+  } else if(staffObj && staffObj.email && trusted){
+    emailWrap.innerHTML = `<div class="muted" style="text-align:left;margin-top:6px;">✓ 已記住此裝置,免輸入Email。<a href="#" onclick="forgetDevice('${staffObj.id}');return false;" style="color:var(--accent);">不是我,清除記住</a></div>`;
+  } else {
+    emailWrap.innerHTML = '';
+  }
   const hasAnyAdmin = STATE.staff.some(s=>s.role==='admin');
   pwWrap.innerHTML = (hasAnyAdmin && staffObj && staffObj.role==='admin')
     ? `<label class="login-label">請輸入管理員密碼</label><input type="password" id="loginPasswordInput" class="field" style="width:100%;" placeholder="管理員密碼">`
@@ -440,13 +455,18 @@ async function attemptLogin(){
   const staffObj = STATE.staff.find(s=>s.id===sel.value);
   const errEl = document.getElementById('loginError');
   if(!staffObj) return;
-  if(staffObj.email){
+  const trusted = isDeviceTrusted(staffObj.id);
+  if(staffObj.email && !trusted){
     const emailInput = document.getElementById('loginEmailInput');
     const val = emailInput? emailInput.value.trim().toLowerCase() : '';
     if(val !== staffObj.email.trim().toLowerCase()){
       errEl.textContent = 'Email不正確,請重新輸入。';
       errEl.style.display = '';
       return;
+    }
+    const rememberCheckbox = document.getElementById('loginRememberDevice');
+    if(rememberCheckbox && rememberCheckbox.checked){
+      setDeviceTrusted(staffObj.id, true);
     }
   }
   const hasAnyAdmin = STATE.staff.some(s=>s.role==='admin');

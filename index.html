@@ -503,6 +503,77 @@ function renderCurrentUserDisplay(){
 
 function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+function showModal(titleHtml, bodyHtml){
+  let modal = document.getElementById('genericModal');
+  if(!modal){
+    modal = document.createElement('div');
+    modal.id = 'genericModal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(60,50,40,0.45);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px;';
+    document.body.appendChild(modal);
+  }
+  modal.innerHTML = `<div style="background:var(--card);border-radius:16px;max-width:640px;width:100%;max-height:82vh;overflow-y:auto;padding:24px;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:12px;">
+      <h3 style="margin:0;font-size:16px;">${titleHtml}</h3>
+      <button class="icon-btn" onclick="closeModal()" style="flex-shrink:0;">✕ 關閉</button>
+    </div>
+    ${bodyHtml}
+  </div>`;
+  modal.style.display='flex';
+}
+function closeModal(){ const m=document.getElementById('genericModal'); if(m) m.style.display='none'; }
+
+function getQuizHistory(staffId, courseId){
+  const p = userProgress(staffId)[courseId];
+  if(!p) return [];
+  if(p.quizHistory && p.quizHistory.length) return p.quizHistory;
+  if(p.quizDetails) return [{score:p.quizScore, passed:p.quizPassed, submittedAt:p.quizSubmittedAt, details:p.quizDetails}];
+  return [];
+}
+
+function showQuizDetailModal(staffId, courseId){
+  renderQuizHistoryModal(staffId, courseId);
+}
+
+function renderQuizHistoryModal(staffId, courseId){
+  const s = STATE.staff.find(x=>x.id===staffId);
+  const course = STATE.courses.find(x=>x.id===courseId);
+  if(!s || !course) return;
+  const history = getQuizHistory(staffId, courseId);
+  const withIdx = history.map((h,i)=>Object.assign({}, h, {__idx:i}));
+  withIdx.sort((a,b)=> new Date(b.submittedAt) - new Date(a.submittedAt));
+  const body = withIdx.length? `<div class="course-list">${withIdx.map((h,rank)=>`
+    <div class="course-item" onclick="showQuizAttemptDetail('${staffId}','${courseId}',${h.__idx})">
+      <div><h4 style="margin:0;">第${withIdx.length-rank}次測驗</h4><p class="muted" style="margin:2px 0 0;">${fmtTime(h.submittedAt)}</p></div>
+      <span class="pill ${h.passed?'ok':'warn'}">${h.score}分</span>
+    </div>
+  `).join('')}</div>` : '<div class="empty">尚無測驗紀錄</div>';
+  showModal(`${escapeHtml(s.name)} — ${escapeHtml(course.title)}<div class="muted" style="font-weight:400;margin-top:4px;">測驗歷史(近一年,共${history.length}次)</div>`, body);
+}
+
+function showQuizAttemptDetail(staffId, courseId, idx){
+  const s = STATE.staff.find(x=>x.id===staffId);
+  const course = STATE.courses.find(x=>x.id===courseId);
+  const history = getQuizHistory(staffId, courseId);
+  const h = history[idx];
+  if(!s || !course || !h) return;
+  const body = `
+    <button class="btn ghost small" style="margin-bottom:14px;" onclick="renderQuizHistoryModal('${staffId}','${courseId}')">← 返回歷史列表</button>
+    ${h.details.map((d,i)=>`
+      <div class="quiz-q" style="border-color:${d.isCorrect?'var(--border)':'#c98f7c'};">
+        <div style="font-weight:600;margin-bottom:6px;">${i+1}. ${escapeHtml(d.q)} ${d.isCorrect? '<span class="pill ok" style="margin-left:6px;">答對</span>' : '<span class="pill" style="background:#f3e4de;color:#b06a54;margin-left:6px;">答錯</span>'}</div>
+        ${d.options.map((opt,oi)=>{
+          let mark='　', style='color:var(--sub);';
+          if(oi===d.correct){ mark='✓'; style='color:var(--ok);font-weight:600;'; }
+          else if(oi===d.selected){ mark='✗'; style='color:#b06a54;text-decoration:line-through;'; }
+          return `<div style="padding:3px 0;${style}">${mark} ${escapeHtml(opt)}</div>`;
+        }).join('')}
+        ${(d.selected===undefined||d.selected===null)? '<div class="muted" style="margin-top:4px;">(未作答)</div>' : ''}
+      </div>
+    `).join('')}
+  `;
+  showModal(`${escapeHtml(s.name)} — ${escapeHtml(course.title)}<div class="muted" style="font-weight:400;margin-top:4px;">得分:${h.score}分 · ${fmtTime(h.submittedAt)}</div>`, body);
+}
+
 function currentUser(){ return STATE.staff.find(s=>s.id===STATE.currentUserId) || STATE.staff[0]; }
 function userProgress(staffId){ return STATE.progress[staffId] || {}; }
 function fmtTime(iso){
@@ -559,6 +630,9 @@ function courseRosterTableHtml(course, watchedLabel){
             else if(p && p.quizPassed) quizStatus = `<span class="pill ok">已通過(${p.quizScore}分)</span>`;
             else if(p && typeof p.quizScore==='number') quizStatus = `<span class="pill warn">未通過(${p.quizScore}分)</span>`;
             else quizStatus = '<span class="pill off">未測驗</span>';
+            if(p && p.quizDetails && p.quizDetails.length){
+              quizStatus += ` <button class="icon-btn" onclick="showQuizDetailModal('${s.id}','${course.id}')">查看詳情</button>`;
+            }
             const complete = isCourseComplete(s.id, course.id);
             return `<tr>
               <td>${escapeHtml(s.name)}</td>
@@ -1342,9 +1416,15 @@ async function submitQuiz(btn, courseId){
   try{ latest = await loadProgress(); }catch(e){ alert('無法連線到資料庫,測驗結果尚未儲存,請確認網路連線後重新送出。'); restore(); return; }
   if(!latest[u.id]) latest[u.id] = {};
   if(!latest[u.id][courseId]) latest[u.id][courseId] = {watchSeconds:0, watched:false, quizPassed:false};
+  const submittedAt = new Date().toISOString();
   latest[u.id][courseId].quizScore = score;
   latest[u.id][courseId].quizPassed = passed;
-  latest[u.id][courseId].quizSubmittedAt = new Date().toISOString();
+  latest[u.id][courseId].quizSubmittedAt = submittedAt;
+  latest[u.id][courseId].quizDetails = details;
+  const history = latest[u.id][courseId].quizHistory || [];
+  history.push({score, passed, submittedAt, details});
+  const oneYearAgo = Date.now() - 365*24*60*60*1000;
+  latest[u.id][courseId].quizHistory = history.filter(h=> new Date(h.submittedAt).getTime() >= oneYearAgo);
   STATE.progress = latest;
   await saveProgress(STATE.progress);
   STATE.quizResult = {courseId, correct, total, score, passed, details};

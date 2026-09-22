@@ -205,6 +205,8 @@ async function loadCurrentUser(){ return storageGet('lms-current-user', null); }
 async function saveCurrentUser(id){ storageSet('lms-current-user', id); }
 async function loadAdminPassword(){ const v = await apiGet('lms-admin-password'); return v===null? 'admin123' : v; }
 async function saveAdminPassword(pw){ await apiSet('lms-admin-password', pw); }
+async function loadLockingEnabled(){ const v = await apiGet('lms-locking-enabled'); return v===null? true : v; }
+async function saveLockingEnabled(val){ await apiSet('lms-locking-enabled', val); }
 
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 function todayLabel(){
@@ -253,6 +255,7 @@ async function initApp(skipWarning){
     STATE.courses = await loadCourses();
     STATE.progress = await loadProgress();
     STATE.adminPassword = await loadAdminPassword();
+    STATE.lockingEnabled = await loadLockingEnabled();
   }catch(e){
     console.error('資料載入失敗', e);
     showLoadErrorGate();
@@ -689,6 +692,7 @@ function isLockExempt(staffObj, course){
   return !!(deptExempt || staffExempt);
 }
 function isCourseLocked(staffId, course){
+  if(STATE.lockingEnabled===false) return false;
   const ids = coursePrerequisiteIds(course);
   if(!ids.length) return false;
   const staffObj = STATE.staff.find(s=>s.id===staffId);
@@ -720,6 +724,21 @@ function render(){
 }
 
 /* ---------- Dashboard ---------- */
+async function toggleLocking(btn){
+  const restore = lockBtn(btn, '處理中...');
+  const next = !(STATE.lockingEnabled!==false); // flip; treat undefined as true
+  try{
+    await saveLockingEnabled(next);
+  }catch(e){
+    alert('無法連線到資料庫,請確認網路連線後再試一次。');
+    restore();
+    return;
+  }
+  STATE.lockingEnabled = next;
+  alert(next? '已重新啟用前置課程鎖定。' : '已暫停所有前置課程鎖定,所有人現在都能自由觀看。');
+  render();
+}
+
 function renderDashboard(){
   const totalStaff = STATE.staff.length;
   const totalCourses = STATE.courses.length;
@@ -755,6 +774,17 @@ function renderDashboard(){
     </div>
     <button class="btn accent" onclick="goView('courses')">+ 前往課程</button>
   </div>
+  ${STATE.lockingEnabled===false? `
+    <div class="card" style="margin-bottom:16px;background:var(--accent-soft);display:flex;justify-content:space-between;align-items:center;">
+      <div>⏸ 目前「前置課程鎖定」已<b>全站暫停</b>,所有人都能自由觀看,不受任何前置課程限制。<div class="muted" style="margin-top:2px;">各課程原本設定的前置條件都還保留著,重新啟用後會自動恢復。</div></div>
+      <button class="btn accent small" onclick="toggleLocking(this)">重新啟用鎖定</button>
+    </div>
+  ` : `
+    <div class="card" style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
+      <div class="muted">前置課程鎖定目前為<b style="color:var(--text);">啟用中</b>。</div>
+      <button class="btn ghost small" onclick="toggleLocking(this)">暫停所有鎖定</button>
+    </div>
+  `}
   <div class="grid4">
     <div class="card stat-card"><div class="top"><div class="label">人員總數</div><div class="icon">◎</div></div><div class="value">${totalStaff}</div></div>
     <div class="card stat-card"><div class="top"><div class="label">課程總數</div><div class="icon">▣</div></div><div class="value">${totalCourses}</div></div>

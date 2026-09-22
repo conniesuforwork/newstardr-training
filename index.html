@@ -676,9 +676,16 @@ function isCourseComplete(staffId, courseId){
   return !!(p && p.watched);
 }
 
+function coursePrerequisiteIds(course){
+  if(!course) return [];
+  if(course.prerequisiteIds && course.prerequisiteIds.length) return course.prerequisiteIds;
+  if(course.prerequisiteId) return [course.prerequisiteId];
+  return [];
+}
 function isCourseLocked(staffId, course){
-  if(!course || !course.prerequisiteId) return false;
-  return !isCourseComplete(staffId, course.prerequisiteId);
+  const ids = coursePrerequisiteIds(course);
+  if(!ids.length) return false;
+  return ids.some(id => !isCourseComplete(staffId, id));
 }
 
 function courseCompletionPct(staffId, courseId){
@@ -788,7 +795,7 @@ function renderCourses(){
   const activeIdx = Math.min(STATE.selectedVideoIndex||0, Math.max(vids.length-1,0));
   const userExempt = selected? isQuizExempt(u, selected) : false;
   const locked = (selected && !admin)? isCourseLocked(u.id, selected) : false;
-  const prereqCourse = (selected && selected.prerequisiteId)? STATE.courses.find(x=>x.id===selected.prerequisiteId) : null;
+  const prereqCourses = selected? coursePrerequisiteIds(selected).map(id=>STATE.courses.find(x=>x.id===id)).filter(Boolean) : [];
 
   return `
   <div class="topbar">
@@ -801,7 +808,7 @@ function renderCourses(){
       ${selected? (locked? `
         <div class="card empty" style="padding:60px 20px;">
           🔒 此課程尚未解鎖<br>
-          <span class="muted">需先完成「${escapeHtml(prereqCourse? prereqCourse.title : '前置課程')}」才能觀看</span>
+          <span class="muted">需先完成「${prereqCourses.map(p=>escapeHtml(p.title)).join('、')||'前置課程'}」才能觀看</span>
         </div>
       ` : `
         <div class="card">
@@ -817,7 +824,7 @@ function renderCourses(){
               <p class="muted" style="max-width:520px;">${escapeHtml(selected.desc||'')}</p>
               ${selected.targetDepts && selected.targetDepts.length? `<p class="muted" style="margin-top:6px;">適用部門:${selected.targetDepts.map(escapeHtml).join('、')}</p>` : ''}
               ${selected.targetStaffIds && selected.targetStaffIds.length? `<p class="muted" style="margin-top:4px;">適用人員:${selected.targetStaffIds.map(id=>{const s=STATE.staff.find(x=>x.id===id); return s? escapeHtml(s.name): '';}).filter(Boolean).join('、')}</p>` : ''}
-              ${prereqCourse? `<p class="muted" style="margin-top:4px;">🔗 前置課程:${escapeHtml(prereqCourse.title)}</p>` : ''}
+              ${prereqCourses.length? `<p class="muted" style="margin-top:4px;">🔗 前置課程:${prereqCourses.map(p=>escapeHtml(p.title)).join('、')}</p>` : ''}
               ${userExempt? '<p class="muted" style="margin-top:4px;">您已豁免此堂課測驗,看完影片即算完成。</p>' : ''}
               ${selected.referenceOnly? '<p class="muted" style="margin-top:4px;">📌 僅供參考資料,不強制要求完成。</p>' : ''}
             </div>
@@ -873,7 +880,7 @@ function renderDocuments(){
   const prog = selected? userProgress(u.id)[selected.id] : null;
   const userExempt = selected? isQuizExempt(u, selected) : false;
   const locked = (selected && !admin)? isCourseLocked(u.id, selected) : false;
-  const prereqCourse = (selected && selected.prerequisiteId)? STATE.courses.find(x=>x.id===selected.prerequisiteId) : null;
+  const prereqCourses = selected? coursePrerequisiteIds(selected).map(id=>STATE.courses.find(x=>x.id===id)).filter(Boolean) : [];
 
   return `
   <div class="topbar">
@@ -886,7 +893,7 @@ function renderDocuments(){
       ${selected? (locked? `
         <div class="card empty" style="padding:60px 20px;">
           🔒 此文件資料尚未解鎖<br>
-          <span class="muted">需先完成「${escapeHtml(prereqCourse? prereqCourse.title : '前置課程')}」才能檢視</span>
+          <span class="muted">需先完成「${prereqCourses.map(p=>escapeHtml(p.title)).join('、')||'前置課程'}」才能檢視</span>
         </div>
       ` : `
         <div class="card">
@@ -896,7 +903,7 @@ function renderDocuments(){
               <p class="muted" style="max-width:520px;">${escapeHtml(selected.desc||'')}</p>
               ${selected.targetDepts && selected.targetDepts.length? `<p class="muted" style="margin-top:6px;">適用部門:${selected.targetDepts.map(escapeHtml).join('、')}</p>` : ''}
               ${selected.targetStaffIds && selected.targetStaffIds.length? `<p class="muted" style="margin-top:4px;">適用人員:${selected.targetStaffIds.map(id=>{const s=STATE.staff.find(x=>x.id===id); return s? escapeHtml(s.name): '';}).filter(Boolean).join('、')}</p>` : ''}
-              ${prereqCourse? `<p class="muted" style="margin-top:4px;">🔗 前置課程:${escapeHtml(prereqCourse.title)}</p>` : ''}
+              ${prereqCourses.length? `<p class="muted" style="margin-top:4px;">🔗 前置課程:${prereqCourses.map(p=>escapeHtml(p.title)).join('、')}</p>` : ''}
               ${userExempt? '<p class="muted" style="margin-top:4px;">您已豁免此份資料測驗,看完文件即算完成。</p>' : ''}
               ${selected.referenceOnly? '<p class="muted" style="margin-top:4px;">📌 僅供參考資料,不強制要求完成。</p>' : ''}
             </div>
@@ -957,16 +964,23 @@ function courseFormInnerHtml(c, requireVideo){
       <input type="checkbox" id="courseFormReferenceOnly" ${c.referenceOnly?'checked':''}>
       僅供參考資料(不強制要求任何人完成,不會出現在待辦名單或計入完成率)
     </label>
-    <div class="muted" style="margin:8px 0;">前置課程(選填;需先完成該課程,這堂才會解鎖)</div>
-    <div class="form-row" style="margin-bottom:14px;">
-      <select id="courseFormPrerequisite" class="field" style="width:100%;">
-        <option value="">— 不需要前置課程 —</option>
-        ${STATE.courses.filter(x=>x.id!==c.id).map(x=>`<option value="${x.id}" ${c.prerequisiteId===x.id?'selected':''}>${escapeHtml(x.title)}</option>`).join('')}
-      </select>
+    <div class="muted" style="margin:8px 0;">前置課程(選填;可複選,全部完成後這堂才會解鎖)</div>
+    <div id="prerequisiteChecklist" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;max-height:180px;overflow-y:auto;padding:4px;">
+      ${(()=>{
+        const others = STATE.courses.filter(x=>x.id!==c.id);
+        if(!others.length) return '<span class="muted">目前沒有其他課程可設為前置課程</span>';
+        const prereqIds = coursePrerequisiteIds(c);
+        return others.map(x=>`<label style="display:flex;align-items:center;gap:5px;font-size:13px;border:1px solid var(--border);padding:6px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" class="prerequisiteCheck" value="${x.id}" ${prereqIds.includes(x.id)?'checked':''}> ${escapeHtml(x.title)}</label>`).join('');
+      })()}
     </div>
-    <div class="muted" style="margin:8px 0;">通知主管(選填;此課程未達標時週報要通知的Email,多個用逗號分隔;留空則用預設通知信箱)</div>
-    <div class="form-row" style="margin-bottom:14px;">
-      <input type="text" id="courseFormNotifyEmails" class="field" style="width:100%;" placeholder="例如:manager1@example.com,manager2@example.com" value="${escapeHtml(c.notifyEmails||'')}">
+    <div class="muted" style="margin:8px 0;">通知主管(選填;此課程未達標時週報要通知的人,可複選;都不勾則用預設通知信箱)</div>
+    <div id="notifyManagerChecklist" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;">
+      ${(()=>{
+        const managers = STATE.staff.filter(s=>s.isManager && s.email);
+        if(!managers.length) return '<span class="muted">尚無標記為「主管」且有填Email的人員,請先在「人員管理」勾選</span>';
+        const currentEmails = (c.notifyEmails||'').split(',').map(e=>e.trim().toLowerCase()).filter(Boolean);
+        return managers.map(a=>`<label style="display:flex;align-items:center;gap:5px;font-size:13px;border:1px solid var(--border);padding:6px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" class="notifyManagerCheck" value="${escapeHtml(a.email)}" ${currentEmails.includes(a.email.trim().toLowerCase())?'checked':''}> ${escapeHtml(a.name)}</label>`).join('');
+      })()}
     </div>
     ${requireVideo? `
     <div class="muted" style="margin:8px 0;">影片(YouTube連結,建議設為不公開,可新增多支;純文字/文件也可以不放影片)</div>
@@ -1145,8 +1159,8 @@ function readCourseForm(){
   const title = document.getElementById('courseFormTitle').value.trim();
   const desc = document.getElementById('courseFormDesc').value.trim();
   const referenceOnly = document.getElementById('courseFormReferenceOnly').checked;
-  const prerequisiteId = document.getElementById('courseFormPrerequisite').value || null;
-  const notifyEmails = document.getElementById('courseFormNotifyEmails').value.trim();
+  const prerequisiteIds = Array.from(document.querySelectorAll('.prerequisiteCheck:checked')).map(el=>el.value);
+  const notifyEmails = Array.from(document.querySelectorAll('.notifyManagerCheck:checked')).map(el=>el.value).join(',');
   const targetDepts = Array.from(document.querySelectorAll('.deptCheck:checked')).map(el=>el.value);
   const targetStaffIds = Array.from(__courseFormStaffIds);
   const quizExemptDepts = Array.from(document.querySelectorAll('.quizExemptDeptCheck:checked')).map(el=>el.value);
@@ -1177,7 +1191,7 @@ function readCourseForm(){
     const url = row.querySelector('.materialUrl').value.trim();
     if(url) materials.push({name: name || '講義', url});
   });
-  return {title, desc, referenceOnly, prerequisiteId, notifyEmails, videos, hasInvalidVideo, quiz, materials, targetDepts, targetStaffIds, quizExemptDepts, quizExemptStaffIds};
+  return {title, desc, referenceOnly, prerequisiteIds, notifyEmails, videos, hasInvalidVideo, quiz, materials, targetDepts, targetStaffIds, quizExemptDepts, quizExemptStaffIds};
 }
 
 function lockBtn(btn, loadingLabel){
@@ -1194,7 +1208,7 @@ async function submitNewCourse(btn){
   if(f.hasInvalidVideo){ alert('有一支影片的連結格式不正確,請確認是有效的YouTube連結'); return; }
   if(__courseFormRequireVideo && !f.referenceOnly && f.videos.length===0){ alert('請至少新增一支有效的YouTube影片,或勾選「僅供參考資料」'); return; }
   const restore = lockBtn(btn, '儲存中...');
-  const course = {id:uid(), title:f.title, desc:f.desc, referenceOnly:f.referenceOnly, prerequisiteId:f.prerequisiteId, notifyEmails:f.notifyEmails, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts, targetStaffIds:f.targetStaffIds, quizExemptDepts:f.quizExemptDepts, quizExemptStaffIds:f.quizExemptStaffIds};
+  const course = {id:uid(), title:f.title, desc:f.desc, referenceOnly:f.referenceOnly, prerequisiteIds:f.prerequisiteIds, notifyEmails:f.notifyEmails, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts, targetStaffIds:f.targetStaffIds, quizExemptDepts:f.quizExemptDepts, quizExemptStaffIds:f.quizExemptStaffIds};
   let latest;
   try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   latest.push(course);
@@ -1215,7 +1229,7 @@ async function submitEditCourse(btn, id){
   try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   const c = latest.find(x=>x.id===id);
   if(!c){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
-  c.title = f.title; c.desc = f.desc; c.referenceOnly = f.referenceOnly; c.prerequisiteId = f.prerequisiteId; c.notifyEmails = f.notifyEmails;
+  c.title = f.title; c.desc = f.desc; c.referenceOnly = f.referenceOnly; c.prerequisiteIds = f.prerequisiteIds; c.notifyEmails = f.notifyEmails;
   if(__courseFormRequireVideo){ c.videos = f.videos; c.videoUrl = f.videos[0]? f.videos[0].url:''; }
   c.quiz = f.quiz; c.materials = f.materials; c.targetDepts = f.targetDepts; c.targetStaffIds = f.targetStaffIds;
   c.quizExemptDepts = f.quizExemptDepts; c.quizExemptStaffIds = f.quizExemptStaffIds;
@@ -1521,6 +1535,10 @@ function staffFormHtml(s){
       <input type="checkbox" id="staffFormCanViewRoster" ${s.canViewRoster?'checked':''}>
       允許查看課程名單(可看到每堂課誰看過、誰測驗過,不需要完整管理員權限)
     </label>
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:14px;cursor:pointer;">
+      <input type="checkbox" id="staffFormIsManager" ${s.isManager?'checked':''}>
+      主管(可在課程的「通知主管」清單中被選取,不需要是管理員身分)
+    </label>
   `;
 }
 function toggleStaffPasswordField(){
@@ -1564,7 +1582,8 @@ function readStaffForm(){
   const role = document.getElementById('staffFormRole').value;
   const password = document.getElementById('staffFormPassword')? document.getElementById('staffFormPassword').value : '';
   const canViewRoster = document.getElementById('staffFormCanViewRoster').checked;
-  return {name, dept, email, role, password, canViewRoster};
+  const isManager = document.getElementById('staffFormIsManager').checked;
+  return {name, dept, email, role, password, canViewRoster, isManager};
 }
 async function submitNewStaff(btn){
   const f = readStaffForm();
@@ -1574,7 +1593,7 @@ async function submitNewStaff(btn){
   const restore = lockBtn(btn, '儲存中...');
   let latest;
   try{ latest = await loadStaff(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
-  const newStaff = {id:uid(), name:f.name, dept:f.dept, email:f.email, role:f.role, canViewRoster:f.canViewRoster};
+  const newStaff = {id:uid(), name:f.name, dept:f.dept, email:f.email, role:f.role, canViewRoster:f.canViewRoster, isManager:f.isManager};
   if(f.role==='admin') newStaff.password = f.password;
   latest.push(newStaff);
   STATE.staff = latest;
@@ -1592,7 +1611,7 @@ async function submitEditStaff(btn, id){
   try{ latest = await loadStaff(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   const s = latest.find(x=>x.id===id);
   if(!s){ alert('找不到這位人員,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
-  s.name = f.name; s.dept = f.dept; s.email = f.email; s.role = f.role; s.canViewRoster = f.canViewRoster;
+  s.name = f.name; s.dept = f.dept; s.email = f.email; s.role = f.role; s.canViewRoster = f.canViewRoster; s.isManager = f.isManager;
   if(f.role==='admin'){
     if(f.password) s.password = f.password;
     else if(!s.password){ alert('請為這位管理員設定專屬密碼'); restore(); return; }

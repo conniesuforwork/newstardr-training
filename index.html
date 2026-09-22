@@ -682,9 +682,17 @@ function coursePrerequisiteIds(course){
   if(course.prerequisiteId) return [course.prerequisiteId];
   return [];
 }
+function isLockExempt(staffObj, course){
+  if(!staffObj || !course) return false;
+  const deptExempt = course.lockExemptDepts && course.lockExemptDepts.includes(staffObj.dept);
+  const staffExempt = course.lockExemptStaffIds && course.lockExemptStaffIds.includes(staffObj.id);
+  return !!(deptExempt || staffExempt);
+}
 function isCourseLocked(staffId, course){
   const ids = coursePrerequisiteIds(course);
   if(!ids.length) return false;
+  const staffObj = STATE.staff.find(s=>s.id===staffId);
+  if(isLockExempt(staffObj, course)) return false;
   return ids.some(id => !isCourseComplete(staffId, id));
 }
 
@@ -973,6 +981,12 @@ function courseFormInnerHtml(c, requireVideo){
         return others.map(x=>`<label style="display:flex;align-items:center;gap:5px;font-size:13px;border:1px solid var(--border);padding:6px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" class="prerequisiteCheck" value="${x.id}" ${prereqIds.includes(x.id)?'checked':''}> ${escapeHtml(x.title)}</label>`).join('');
       })()}
     </div>
+    <div class="muted" style="margin:8px 0;">鎖定豁免部門(這些部門不受前置課程限制,可直接觀看)</div>
+    <div id="lockExemptDeptChecklist" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;">
+      ${depts.length? depts.map(d=>`<label style="display:flex;align-items:center;gap:5px;font-size:13px;border:1px solid var(--border);padding:6px 10px;border-radius:8px;cursor:pointer;"><input type="checkbox" class="lockExemptDeptCheck" value="${escapeHtml(d)}" ${(c.lockExemptDepts||[]).includes(d)?'checked':''}> ${escapeHtml(d)}</label>`).join('') : '<span class="muted">尚無部門資料</span>'}
+    </div>
+    <div class="muted" style="margin:8px 0;">鎖定豁免人員(這些人不受前置課程限制,可直接觀看)</div>
+    ${personPickerHtml('lockExempt', depts)}
     <div class="muted" style="margin:8px 0;">通知主管(選填;此課程未達標時週報要通知的人,可複選;都不勾則用預設通知信箱)</div>
     <div id="notifyManagerChecklist" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;">
       ${(()=>{
@@ -1029,8 +1043,13 @@ function personPickerHtml(kind, depts){
 
 let __courseFormStaffIds = new Set();
 let __courseFormQuizExemptIds = new Set();
+let __courseFormLockExemptIds = new Set();
 
-function personSet(kind){ return kind==='exempt'? __courseFormQuizExemptIds : __courseFormStaffIds; }
+function personSet(kind){
+  if(kind==='exempt') return __courseFormQuizExemptIds;
+  if(kind==='lockExempt') return __courseFormLockExemptIds;
+  return __courseFormStaffIds;
+}
 
 function renderPersonChecklist(kind){
   const filterEl = document.getElementById(kind+'DeptFilterSelect');
@@ -1053,10 +1072,10 @@ function renderPersonSummary(kind){
   const el = document.getElementById(kind+'SelectedSummary');
   if(!el) return;
   const set = personSet(kind);
-  const emptyText = kind==='exempt'? '目前沒有人豁免測驗。' : '目前尚未指定任何人員。';
+  const emptyText = kind==='exempt'? '目前沒有人豁免測驗。' : (kind==='lockExempt'? '目前沒有人豁免鎖定。' : '目前尚未指定任何人員。');
   if(set.size===0){ el.textContent = emptyText; return; }
   const names = Array.from(set).map(id=>{ const s=STATE.staff.find(x=>x.id===id); return s? s.name : null; }).filter(Boolean);
-  el.textContent = (kind==='exempt'? '已豁免(':'已選擇(')+names.length+'):'+names.join('、');
+  el.textContent = ((kind==='exempt'||kind==='lockExempt')? '已豁免(':'已選擇(')+names.length+'):'+names.join('、');
 }
 
 function addVideoRow(prefill){
@@ -1077,6 +1096,7 @@ function showAddCourseForm(requireVideo){
   __courseFormRequireVideo = (requireVideo!==false);
   __courseFormStaffIds = new Set();
   __courseFormQuizExemptIds = new Set();
+  __courseFormLockExemptIds = new Set();
   const wrap = document.getElementById('addCourseFormWrap');
   wrap.innerHTML = `
     <div class="card" style="margin-bottom:16px;">
@@ -1092,6 +1112,7 @@ function showAddCourseForm(requireVideo){
   addQuestionRow();
   renderPersonChecklist('target');
   renderPersonChecklist('exempt');
+  renderPersonChecklist('lockExempt');
 }
 
 function showEditCourseForm(id, requireVideo){
@@ -1100,6 +1121,7 @@ function showEditCourseForm(id, requireVideo){
   if(!c) return;
   __courseFormStaffIds = new Set(c.targetStaffIds || []);
   __courseFormQuizExemptIds = new Set(c.quizExemptStaffIds || []);
+  __courseFormLockExemptIds = new Set(c.lockExemptStaffIds || []);
   const wrap = document.getElementById('addCourseFormWrap');
   wrap.innerHTML = `
     <div class="card" style="margin-bottom:16px;">
@@ -1119,6 +1141,7 @@ function showEditCourseForm(id, requireVideo){
   (c.materials || []).forEach(m=> addMaterialRow(m));
   renderPersonChecklist('target');
   renderPersonChecklist('exempt');
+  renderPersonChecklist('lockExempt');
   wrap.scrollIntoView({behavior:'smooth'});
 }
 
@@ -1165,6 +1188,8 @@ function readCourseForm(){
   const targetStaffIds = Array.from(__courseFormStaffIds);
   const quizExemptDepts = Array.from(document.querySelectorAll('.quizExemptDeptCheck:checked')).map(el=>el.value);
   const quizExemptStaffIds = Array.from(__courseFormQuizExemptIds);
+  const lockExemptDepts = Array.from(document.querySelectorAll('.lockExemptDeptCheck:checked')).map(el=>el.value);
+  const lockExemptStaffIds = Array.from(__courseFormLockExemptIds);
   const videoRows = document.querySelectorAll('#videoBuilder .form-row');
   const videos = [];
   let hasInvalidVideo = false;
@@ -1191,7 +1216,7 @@ function readCourseForm(){
     const url = row.querySelector('.materialUrl').value.trim();
     if(url) materials.push({name: name || '講義', url});
   });
-  return {title, desc, referenceOnly, prerequisiteIds, notifyEmails, videos, hasInvalidVideo, quiz, materials, targetDepts, targetStaffIds, quizExemptDepts, quizExemptStaffIds};
+  return {title, desc, referenceOnly, prerequisiteIds, notifyEmails, videos, hasInvalidVideo, quiz, materials, targetDepts, targetStaffIds, quizExemptDepts, quizExemptStaffIds, lockExemptDepts, lockExemptStaffIds};
 }
 
 function lockBtn(btn, loadingLabel){
@@ -1208,7 +1233,7 @@ async function submitNewCourse(btn){
   if(f.hasInvalidVideo){ alert('有一支影片的連結格式不正確,請確認是有效的YouTube連結'); return; }
   if(__courseFormRequireVideo && !f.referenceOnly && f.videos.length===0){ alert('請至少新增一支有效的YouTube影片,或勾選「僅供參考資料」'); return; }
   const restore = lockBtn(btn, '儲存中...');
-  const course = {id:uid(), title:f.title, desc:f.desc, referenceOnly:f.referenceOnly, prerequisiteIds:f.prerequisiteIds, notifyEmails:f.notifyEmails, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts, targetStaffIds:f.targetStaffIds, quizExemptDepts:f.quizExemptDepts, quizExemptStaffIds:f.quizExemptStaffIds};
+  const course = {id:uid(), title:f.title, desc:f.desc, referenceOnly:f.referenceOnly, prerequisiteIds:f.prerequisiteIds, notifyEmails:f.notifyEmails, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts, targetStaffIds:f.targetStaffIds, quizExemptDepts:f.quizExemptDepts, quizExemptStaffIds:f.quizExemptStaffIds, lockExemptDepts:f.lockExemptDepts, lockExemptStaffIds:f.lockExemptStaffIds};
   let latest;
   try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   latest.push(course);
@@ -1233,6 +1258,7 @@ async function submitEditCourse(btn, id){
   if(__courseFormRequireVideo){ c.videos = f.videos; c.videoUrl = f.videos[0]? f.videos[0].url:''; }
   c.quiz = f.quiz; c.materials = f.materials; c.targetDepts = f.targetDepts; c.targetStaffIds = f.targetStaffIds;
   c.quizExemptDepts = f.quizExemptDepts; c.quizExemptStaffIds = f.quizExemptStaffIds;
+  c.lockExemptDepts = f.lockExemptDepts; c.lockExemptStaffIds = f.lockExemptStaffIds;
   STATE.courses = latest;
   await saveCourses(STATE.courses);
   document.getElementById('addCourseFormWrap').innerHTML='';

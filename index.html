@@ -1501,8 +1501,8 @@ function renderStaff(){
           myCourses.forEach(c=>{ if(isCourseComplete(s.id, c.id)) done++; });
           const pct = total? Math.round(done/total*100):0;
           const lastLogin = userProgress(s.id)._lastLogin;
-          return `<tr>
-            <td>${escapeHtml(s.name)}</td>
+          return `<tr ${s.isManager? 'style="background:var(--accent-soft);"':''}>
+            <td>${escapeHtml(s.name)} ${s.isManager? '<span class="pill ok">主管</span>':''}</td>
             <td>${escapeHtml(s.dept||'-')}</td>
             <td>${escapeHtml(s.email||'-')}</td>
             <td><span class="pill ${s.role==='admin'?'warn':'off'}">${s.role==='admin'?'管理員':'一般人員'}</span></td>

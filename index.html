@@ -676,6 +676,11 @@ function isCourseComplete(staffId, courseId){
   return !!(p && p.watched);
 }
 
+function isCourseLocked(staffId, course){
+  if(!course || !course.prerequisiteId) return false;
+  return !isCourseComplete(staffId, course.prerequisiteId);
+}
+
 function courseCompletionPct(staffId, courseId){
   const course = STATE.courses.find(c=>c.id===courseId);
   if(course && course.referenceOnly) return 100;
@@ -782,6 +787,8 @@ function renderCourses(){
   const vids = selected? courseVideos(selected) : [];
   const activeIdx = Math.min(STATE.selectedVideoIndex||0, Math.max(vids.length-1,0));
   const userExempt = selected? isQuizExempt(u, selected) : false;
+  const locked = (selected && !admin)? isCourseLocked(u.id, selected) : false;
+  const prereqCourse = (selected && selected.prerequisiteId)? STATE.courses.find(x=>x.id===selected.prerequisiteId) : null;
 
   return `
   <div class="topbar">
@@ -791,7 +798,12 @@ function renderCourses(){
   <div id="addCourseFormWrap"></div>
   <div class="two-col">
     <div>
-      ${selected? `
+      ${selected? (locked? `
+        <div class="card empty" style="padding:60px 20px;">
+          🔒 此課程尚未解鎖<br>
+          <span class="muted">需先完成「${escapeHtml(prereqCourse? prereqCourse.title : '前置課程')}」才能觀看</span>
+        </div>
+      ` : `
         <div class="card">
           <div class="video-wrap"><div id="ytplayer"></div></div>
           ${vids.length>1? `
@@ -805,6 +817,7 @@ function renderCourses(){
               <p class="muted" style="max-width:520px;">${escapeHtml(selected.desc||'')}</p>
               ${selected.targetDepts && selected.targetDepts.length? `<p class="muted" style="margin-top:6px;">適用部門:${selected.targetDepts.map(escapeHtml).join('、')}</p>` : ''}
               ${selected.targetStaffIds && selected.targetStaffIds.length? `<p class="muted" style="margin-top:4px;">適用人員:${selected.targetStaffIds.map(id=>{const s=STATE.staff.find(x=>x.id===id); return s? escapeHtml(s.name): '';}).filter(Boolean).join('、')}</p>` : ''}
+              ${prereqCourse? `<p class="muted" style="margin-top:4px;">🔗 前置課程:${escapeHtml(prereqCourse.title)}</p>` : ''}
               ${userExempt? '<p class="muted" style="margin-top:4px;">您已豁免此堂課測驗,看完影片即算完成。</p>' : ''}
               ${selected.referenceOnly? '<p class="muted" style="margin-top:4px;">📌 僅供參考資料,不強制要求完成。</p>' : ''}
             </div>
@@ -828,7 +841,7 @@ function renderCourses(){
             <button class="icon-btn" style="margin-left:10px;" onclick="deleteCourse(this,'${selected.id}')">刪除此課程</button>
           </div>` : ''}
         </div>
-      ` : `<div class="card empty">${admin? '尚未選擇課程,請先新增或於右側選擇。' : '目前沒有指派給您的課程。'}</div>`}
+      `) : `<div class="card empty">${admin? '尚未選擇課程,請先新增或於右側選擇。' : '目前沒有指派給您的課程。'}</div>`}
     </div>
     <div class="card">
       <div class="section-title" style="margin-top:0;">課程清單</div>
@@ -837,9 +850,10 @@ function renderCourses(){
           const p = userProgress(u.id)[c.id];
           const complete = isCourseComplete(u.id, c.id);
           const vc = courseVideos(c).length;
+          const cLocked = !admin && isCourseLocked(u.id, c);
           return `<div class="course-item ${c.id===STATE.selectedCourseId?'selected':''}" onclick="selectCourse('${c.id}')">
-            <div><h4>${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${p&&p.watched?'已觀看':'未觀看'} ${vc>1? '· '+vc+' 支影片':''} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''}</p></div>
-            <span class="pill ${complete?'ok':(p?'warn':'off')}">${complete?'完成':(p?'待測驗':'未開始')}</span>
+            <div><h4>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (p&&p.watched?'已觀看':'未觀看')} ${vc>1? '· '+vc+' 支影片':''} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''}</p></div>
+            <span class="pill ${cLocked?'off':(complete?'ok':(p?'warn':'off'))}">${cLocked?'鎖定':(complete?'完成':(p?'待測驗':'未開始'))}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無課程</div>'}
       </div>
@@ -858,6 +872,8 @@ function renderDocuments(){
   const u = currentUser();
   const prog = selected? userProgress(u.id)[selected.id] : null;
   const userExempt = selected? isQuizExempt(u, selected) : false;
+  const locked = (selected && !admin)? isCourseLocked(u.id, selected) : false;
+  const prereqCourse = (selected && selected.prerequisiteId)? STATE.courses.find(x=>x.id===selected.prerequisiteId) : null;
 
   return `
   <div class="topbar">
@@ -867,7 +883,12 @@ function renderDocuments(){
   <div id="addCourseFormWrap"></div>
   <div class="two-col">
     <div>
-      ${selected? `
+      ${selected? (locked? `
+        <div class="card empty" style="padding:60px 20px;">
+          🔒 此文件資料尚未解鎖<br>
+          <span class="muted">需先完成「${escapeHtml(prereqCourse? prereqCourse.title : '前置課程')}」才能檢視</span>
+        </div>
+      ` : `
         <div class="card">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;">
             <div>
@@ -875,6 +896,7 @@ function renderDocuments(){
               <p class="muted" style="max-width:520px;">${escapeHtml(selected.desc||'')}</p>
               ${selected.targetDepts && selected.targetDepts.length? `<p class="muted" style="margin-top:6px;">適用部門:${selected.targetDepts.map(escapeHtml).join('、')}</p>` : ''}
               ${selected.targetStaffIds && selected.targetStaffIds.length? `<p class="muted" style="margin-top:4px;">適用人員:${selected.targetStaffIds.map(id=>{const s=STATE.staff.find(x=>x.id===id); return s? escapeHtml(s.name): '';}).filter(Boolean).join('、')}</p>` : ''}
+              ${prereqCourse? `<p class="muted" style="margin-top:4px;">🔗 前置課程:${escapeHtml(prereqCourse.title)}</p>` : ''}
               ${userExempt? '<p class="muted" style="margin-top:4px;">您已豁免此份資料測驗,看完文件即算完成。</p>' : ''}
               ${selected.referenceOnly? '<p class="muted" style="margin-top:4px;">📌 僅供參考資料,不強制要求完成。</p>' : ''}
             </div>
@@ -897,7 +919,7 @@ function renderDocuments(){
             <button class="icon-btn" style="margin-left:10px;" onclick="deleteCourse(this,'${selected.id}')">刪除此文件資料</button>
           </div>` : ''}
         </div>
-      ` : `<div class="card empty">${admin? '尚未選擇文件資料,請先新增或於右側選擇。' : '目前沒有指派給您的文件資料。'}</div>`}
+      `) : `<div class="card empty">${admin? '尚未選擇文件資料,請先新增或於右側選擇。' : '目前沒有指派給您的文件資料。'}</div>`}
     </div>
     <div class="card">
       <div class="section-title" style="margin-top:0;">文件清單</div>
@@ -905,9 +927,10 @@ function renderDocuments(){
         ${visibleDocs.map(c=>{
           const p = userProgress(u.id)[c.id];
           const complete = isCourseComplete(u.id, c.id);
+          const cLocked = !admin && isCourseLocked(u.id, c);
           return `<div class="course-item ${c.id===STATE.selectedCourseId?'selected':''}" onclick="selectCourse('${c.id}')">
-            <div><h4>${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${c.materials&&c.materials.length? c.materials.length+' 份文件':''} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''}</p></div>
-            <span class="pill ${complete?'ok':(p?'warn':'off')}">${complete?'完成':(p?'待測驗':'未開始')}</span>
+            <div><h4>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (c.materials&&c.materials.length? c.materials.length+' 份文件':'')} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''}</p></div>
+            <span class="pill ${cLocked?'off':(complete?'ok':(p?'warn':'off'))}">${cLocked?'鎖定':(complete?'完成':(p?'待測驗':'未開始'))}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無文件資料</div>'}
       </div>
@@ -934,6 +957,17 @@ function courseFormInnerHtml(c, requireVideo){
       <input type="checkbox" id="courseFormReferenceOnly" ${c.referenceOnly?'checked':''}>
       僅供參考資料(不強制要求任何人完成,不會出現在待辦名單或計入完成率)
     </label>
+    <div class="muted" style="margin:8px 0;">前置課程(選填;需先完成該課程,這堂才會解鎖)</div>
+    <div class="form-row" style="margin-bottom:14px;">
+      <select id="courseFormPrerequisite" class="field" style="width:100%;">
+        <option value="">— 不需要前置課程 —</option>
+        ${STATE.courses.filter(x=>x.id!==c.id).map(x=>`<option value="${x.id}" ${c.prerequisiteId===x.id?'selected':''}>${escapeHtml(x.title)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="muted" style="margin:8px 0;">通知主管(選填;此課程未達標時週報要通知的Email,多個用逗號分隔;留空則用預設通知信箱)</div>
+    <div class="form-row" style="margin-bottom:14px;">
+      <input type="text" id="courseFormNotifyEmails" class="field" style="width:100%;" placeholder="例如:manager1@example.com,manager2@example.com" value="${escapeHtml(c.notifyEmails||'')}">
+    </div>
     ${requireVideo? `
     <div class="muted" style="margin:8px 0;">影片(YouTube連結,建議設為不公開,可新增多支;純文字/文件也可以不放影片)</div>
     <div id="videoBuilder"></div>
@@ -1111,6 +1145,8 @@ function readCourseForm(){
   const title = document.getElementById('courseFormTitle').value.trim();
   const desc = document.getElementById('courseFormDesc').value.trim();
   const referenceOnly = document.getElementById('courseFormReferenceOnly').checked;
+  const prerequisiteId = document.getElementById('courseFormPrerequisite').value || null;
+  const notifyEmails = document.getElementById('courseFormNotifyEmails').value.trim();
   const targetDepts = Array.from(document.querySelectorAll('.deptCheck:checked')).map(el=>el.value);
   const targetStaffIds = Array.from(__courseFormStaffIds);
   const quizExemptDepts = Array.from(document.querySelectorAll('.quizExemptDeptCheck:checked')).map(el=>el.value);
@@ -1141,7 +1177,7 @@ function readCourseForm(){
     const url = row.querySelector('.materialUrl').value.trim();
     if(url) materials.push({name: name || '講義', url});
   });
-  return {title, desc, referenceOnly, videos, hasInvalidVideo, quiz, materials, targetDepts, targetStaffIds, quizExemptDepts, quizExemptStaffIds};
+  return {title, desc, referenceOnly, prerequisiteId, notifyEmails, videos, hasInvalidVideo, quiz, materials, targetDepts, targetStaffIds, quizExemptDepts, quizExemptStaffIds};
 }
 
 function lockBtn(btn, loadingLabel){
@@ -1158,7 +1194,7 @@ async function submitNewCourse(btn){
   if(f.hasInvalidVideo){ alert('有一支影片的連結格式不正確,請確認是有效的YouTube連結'); return; }
   if(__courseFormRequireVideo && !f.referenceOnly && f.videos.length===0){ alert('請至少新增一支有效的YouTube影片,或勾選「僅供參考資料」'); return; }
   const restore = lockBtn(btn, '儲存中...');
-  const course = {id:uid(), title:f.title, desc:f.desc, referenceOnly:f.referenceOnly, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts, targetStaffIds:f.targetStaffIds, quizExemptDepts:f.quizExemptDepts, quizExemptStaffIds:f.quizExemptStaffIds};
+  const course = {id:uid(), title:f.title, desc:f.desc, referenceOnly:f.referenceOnly, prerequisiteId:f.prerequisiteId, notifyEmails:f.notifyEmails, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts, targetStaffIds:f.targetStaffIds, quizExemptDepts:f.quizExemptDepts, quizExemptStaffIds:f.quizExemptStaffIds};
   let latest;
   try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   latest.push(course);
@@ -1179,7 +1215,7 @@ async function submitEditCourse(btn, id){
   try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   const c = latest.find(x=>x.id===id);
   if(!c){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
-  c.title = f.title; c.desc = f.desc; c.referenceOnly = f.referenceOnly;
+  c.title = f.title; c.desc = f.desc; c.referenceOnly = f.referenceOnly; c.prerequisiteId = f.prerequisiteId; c.notifyEmails = f.notifyEmails;
   if(__courseFormRequireVideo){ c.videos = f.videos; c.videoUrl = f.videos[0]? f.videos[0].url:''; }
   c.quiz = f.quiz; c.materials = f.materials; c.targetDepts = f.targetDepts; c.targetStaffIds = f.targetStaffIds;
   c.quizExemptDepts = f.quizExemptDepts; c.quizExemptStaffIds = f.quizExemptStaffIds;
@@ -1328,7 +1364,7 @@ function renderQuiz(){
   const u = currentUser();
   const admin = isAdmin();
   const scopedCourses = admin? STATE.courses : coursesForStaff(u);
-  const withQuiz = scopedCourses.filter(c=>c.quiz && c.quiz.length && (admin || !isQuizExempt(u, c)));
+  const withQuiz = scopedCourses.filter(c=>c.quiz && c.quiz.length && (admin || (!isQuizExempt(u, c) && !isCourseLocked(u.id, c))));
   const selected = withQuiz.find(c=>c.id===STATE.selectedCourseId) || withQuiz[0];
 
   return `

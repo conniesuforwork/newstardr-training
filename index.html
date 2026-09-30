@@ -165,12 +165,12 @@ function jsonpRequest(params){
   });
 }
 async function jsonpRequestWithRetry(params, retries){
-  retries = (retries===undefined)? 1 : retries;
+  retries = (retries===undefined)? 3 : retries;
   try{
     return await jsonpRequest(params);
   }catch(e){
     if(retries > 0){
-      await new Promise(r=>setTimeout(r, 800));
+      await new Promise(r=>setTimeout(r, 1000));
       return jsonpRequestWithRetry(params, retries-1);
     }
     throw e;
@@ -186,13 +186,25 @@ function xhrPost(url, data){
     xhr.send(JSON.stringify(data));
   });
 }
+async function xhrPostWithRetry(url, data, retries){
+  retries = (retries===undefined)? 2 : retries;
+  try{
+    return await xhrPost(url, data);
+  }catch(e){
+    if(retries > 0){
+      await new Promise(r=>setTimeout(r, 1000));
+      return xhrPostWithRetry(url, data, retries-1);
+    }
+    throw e;
+  }
+}
 async function apiGet(key){
-  const val = await jsonpRequestWithRetry({ key: key }, 1);
+  const val = await jsonpRequestWithRetry({ key: key });
   return val; // null is a legitimate "key not found" result
 }
 async function apiSet(key, value){
   // POST body has no practical size limit, unlike a GET query string — safe for large courses/quizzes
-  await xhrPost(API_URL, { key: key, value: JSON.stringify(value) });
+  await xhrPostWithRetry(API_URL, { key: key, value: JSON.stringify(value) });
 }
 
 async function loadStaff(){ const v = await apiGet('lms-staff'); return v===null? [] : v; }

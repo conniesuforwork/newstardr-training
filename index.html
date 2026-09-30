@@ -197,8 +197,43 @@ async function apiSet(key, value){
 
 async function loadStaff(){ const v = await apiGet('lms-staff'); return v===null? [] : v; }
 async function saveStaff(list){ await apiSet('lms-staff', list); }
-async function loadCourses(){ const v = await apiGet('lms-courses'); return v===null? [] : v; }
-async function saveCourses(list){ await apiSet('lms-courses', list); }
+
+/* Courses: stored one-per-row (key "lms-course:<id>") plus a small index row
+   listing the ids, so no single cell ever holds the whole course list —
+   avoids Google Sheets' ~50,000-character per-cell limit. */
+async function loadCourseIndex(){ const v = await apiGet('lms-course-index'); return v===null? [] : v; }
+async function saveCourseIndex(ids){ await apiSet('lms-course-index', ids); }
+async function loadCourse(id){ return await apiGet('lms-course:'+id); }
+async function saveCourse(course){ await apiSet('lms-course:'+course.id, course); }
+
+async function loadCourses(){
+  await migrateCoursesIfNeeded();
+  const ids = await loadCourseIndex();
+  if(!ids.length) return [];
+  const settled = await Promise.allSettled(ids.map(id=>loadCourse(id)));
+  return settled.filter(r=>r.status==='fulfilled' && r.value).map(r=>r.value);
+}
+// Legacy-shaped bulk save — used only by the one-time migration below.
+// Regular add/edit/delete/pin flows now write a single course row instead.
+async function saveCourses(list){
+  for(const c of list){
+    await saveCourse(c);
+  }
+  await saveCourseIndex(list.map(c=>c.id));
+}
+let __coursesMigrationChecked = false;
+async function migrateCoursesIfNeeded(){
+  if(__coursesMigrationChecked) return;
+  __coursesMigrationChecked = true;
+  try{
+    const idx = await loadCourseIndex();
+    if(idx && idx.length) return; // already migrated
+    const legacy = await apiGet('lms-courses');
+    if(!legacy || !legacy.length) return; // nothing to migrate
+    await saveCourses(legacy);
+  }catch(e){ console.error('課程資料搬移失敗,將於下次載入時重試', e); __coursesMigrationChecked = false; }
+}
+
 async function loadProgress(){ const v = await apiGet('lms-progress'); return v===null? {} : v; }
 async function saveProgress(obj){ await apiSet('lms-progress', obj); }
 async function loadCurrentUser(){ return storageGet('lms-current-user', null); }

@@ -155,7 +155,7 @@ function jsonpRequest(params){
   return new Promise((resolve, reject)=>{
     const cbName = 'lms_cb_' + (__jsonpCounter++) + '_' + Date.now();
     const script = document.createElement('script');
-    const timeout = setTimeout(()=>{ cleanup(); reject(new Error('timeout')); }, 25000);
+    const timeout = setTimeout(()=>{ cleanup(); reject(new Error('timeout')); }, 10000);
     function cleanup(){ clearTimeout(timeout); delete window[cbName]; script.remove(); }
     window[cbName] = (data)=>{ cleanup(); resolve(data); };
     const qs = new URLSearchParams(Object.assign({}, params, { callback: cbName })).toString();
@@ -165,12 +165,12 @@ function jsonpRequest(params){
   });
 }
 async function jsonpRequestWithRetry(params, retries){
-  retries = (retries===undefined)? 3 : retries;
+  retries = (retries===undefined)? 2 : retries;
   try{
     return await jsonpRequest(params);
   }catch(e){
     if(retries > 0){
-      await new Promise(r=>setTimeout(r, 1000));
+      await new Promise(r=>setTimeout(r, 700));
       return jsonpRequestWithRetry(params, retries-1);
     }
     throw e;
@@ -180,7 +180,7 @@ function xhrPost(url, data){
   return new Promise((resolve, reject)=>{
     const xhr = new XMLHttpRequest();
     xhr.open('POST', url, true);
-    const timer = setTimeout(()=>{ xhr.abort(); reject(new Error('timeout')); }, 20000);
+    const timer = setTimeout(()=>{ xhr.abort(); reject(new Error('timeout')); }, 12000);
     xhr.onload = ()=>{ clearTimeout(timer); resolve(xhr.responseText); };
     xhr.onerror = ()=>{ clearTimeout(timer); reject(new Error('network error')); };
     xhr.send(JSON.stringify(data));
@@ -298,11 +298,14 @@ async function initApp(skipWarning){
   }
   showLoadingGate();
   try{
-    STATE.staff = await loadStaff();
-    STATE.courses = await loadCourses();
-    STATE.progress = await loadProgress();
-    STATE.adminPassword = await loadAdminPassword();
-    STATE.lockingEnabled = await loadLockingEnabled();
+    const [staff, courses, progress, adminPassword, lockingEnabled] = await Promise.all([
+      loadStaff(), loadCourses(), loadProgress(), loadAdminPassword(), loadLockingEnabled()
+    ]);
+    STATE.staff = staff;
+    STATE.courses = courses;
+    STATE.progress = progress;
+    STATE.adminPassword = adminPassword;
+    STATE.lockingEnabled = lockingEnabled;
   }catch(e){
     console.error('資料載入失敗', e);
     showLoadErrorGate();
@@ -771,6 +774,39 @@ function render(){
 }
 
 /* ---------- Dashboard ---------- */
+function prereqBadgeHtml(c, admin){
+  if(!admin) return '';
+  const ids = coursePrerequisiteIds(c);
+  if(!ids.length) return '';
+  const names = ids.map(id=>{ const x=STATE.courses.find(y=>y.id===id); return x? x.title : '(已刪除的課程)'; });
+  return '· <span style="color:var(--accent);">🔗 需先完成:'+names.map(escapeHtml).join('、')+'</span>';
+}
+
+function gatedCoursesOverviewHtml(){
+  const gated = STATE.courses.filter(c=>coursePrerequisiteIds(c).length>0);
+  const rows = gated.map(c=>{
+    const names = coursePrerequisiteIds(c).map(id=>{ const x=STATE.courses.find(y=>y.id===id); return x? escapeHtml(x.title) : '<span class="muted">(已刪除的課程)</span>'; }).join('、');
+    const exemptCount = (c.lockExemptDepts||[]).length + (c.lockExemptStaffIds||[]).length;
+    const type = courseVideos(c).length? '課程' : '文件';
+    return `<tr>
+      <td>${c.pinned?'⭐ ':''}${escapeHtml(c.title)} <span class="pill off">${type}</span></td>
+      <td>${names}</td>
+      <td class="muted">${exemptCount? '有豁免('+exemptCount+')':'-'}</td>
+    </tr>`;
+  }).join('');
+  return `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="section-title" style="margin-top:0;">學習路徑總覽(有設定前置課程的項目)</div>
+      ${gated.length? `
+        <table>
+          <thead><tr><th>被鎖定的課程/文件</th><th>需先完成</th><th>鎖定豁免</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      ` : '<div class="empty">目前沒有任何課程設定前置條件。</div>'}
+    </div>
+  `;
+}
+
 async function toggleLocking(btn){
   const restore = lockBtn(btn, '處理中...');
   const next = !(STATE.lockingEnabled!==false); // flip; treat undefined as true
@@ -838,6 +874,8 @@ function renderDashboard(){
     <div class="card stat-card"><div class="top"><div class="label">整體完成率</div><div class="icon">↗</div></div><div class="value">${rate}%</div></div>
     <div class="card stat-card"><div class="top"><div class="label">待完成測驗</div><div class="icon">!</div></div><div class="value">${pendingQuiz}</div></div>
   </div>
+
+  ${gatedCoursesOverviewHtml()}
 
   <div class="section-title">我的課程進度</div>
   <div class="card">
@@ -944,7 +982,7 @@ function renderCourses(){
           const vc = courseVideos(c).length;
           const cLocked = !admin && isCourseLocked(u.id, c);
           return `<div class="course-item ${c.id===STATE.selectedCourseId?'selected':''}" onclick="selectCourse('${c.id}')">
-            <div><h4>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (p&&p.watched?'已觀看':'未觀看')} ${vc>1? '· '+vc+' 支影片':''} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''}</p></div>
+            <div><h4>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (p&&p.watched?'已觀看':'未觀看')} ${vc>1? '· '+vc+' 支影片':''} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''} ${prereqBadgeHtml(c, admin)}</p></div>
             <span class="pill ${cLocked?'off':(complete?'ok':(p?'warn':'off'))}">${cLocked?'鎖定':(complete?'完成':(p?'待測驗':'未開始'))}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無課程</div>'}
@@ -1021,7 +1059,7 @@ function renderDocuments(){
           const complete = isCourseComplete(u.id, c.id);
           const cLocked = !admin && isCourseLocked(u.id, c);
           return `<div class="course-item ${c.id===STATE.selectedCourseId?'selected':''}" onclick="selectCourse('${c.id}')">
-            <div><h4>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (c.materials&&c.materials.length? c.materials.length+' 份文件':'')} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''}</p></div>
+            <div><h4>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (c.materials&&c.materials.length? c.materials.length+' 份文件':'')} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''} ${prereqBadgeHtml(c, admin)}</p></div>
             <span class="pill ${cLocked?'off':(complete?'ok':(p?'warn':'off'))}">${cLocked?'鎖定':(complete?'完成':(p?'待測驗':'未開始'))}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無文件資料</div>'}

@@ -210,40 +210,99 @@ async function apiSet(key, value){
 async function loadStaff(){ const v = await apiGet('lms-staff'); return v===null? [] : v; }
 async function saveStaff(list){ await apiSet('lms-staff', list); }
 
-/* Courses: stored one-per-row (key "lms-course:<id>") plus a small index row
-   listing the ids, so no single cell ever holds the whole course list —
-   avoids Google Sheets' ~50,000-character per-cell limit. */
-async function loadCourseIndex(){ const v = await apiGet('lms-course-index'); return v===null? [] : v; }
+/* Courses: stored one-per-row (key "lms-course:<id>") so no single cell ever
+   approaches Google Sheets' ~50,000-character limit. A small index row keeps the
+   display order. Rows are the source of truth; deleted courses are tombstoned
+   (deleted:true) rather than removed. */
+const COURSE_PREFIX = 'lms-course:';
+async function loadCourseIndex(){ const v = await apiGet('lms-course-index'); return Array.isArray(v)? v : []; }
 async function saveCourseIndex(ids){ await apiSet('lms-course-index', ids); }
-async function loadCourse(id){ return await apiGet('lms-course:'+id); }
-async function saveCourse(course){ await apiSet('lms-course:'+course.id, course); }
+async function loadCourse(id){ return await apiGet(COURSE_PREFIX+id); }
+async function saveCourse(course){ await apiSet(COURSE_PREFIX+course.id, course); }
 
-async function loadCourses(){
-  await migrateCoursesIfNeeded();
-  const ids = await loadCourseIndex();
-  if(!ids.length) return [];
-  const settled = await Promise.allSettled(ids.map(id=>loadCourse(id)));
-  return settled.filter(r=>r.status==='fulfilled' && r.value).map(r=>r.value);
+// One request that returns many rows at once (needs the updated Apps Script).
+async function apiMulti(keys, prefix){
+  const params = { action:'multi', keys: keys.join(',') };
+  if(prefix) params.prefix = prefix;
+  const v = await jsonpRequestWithRetry(params);
+  if(v===null || typeof v!=='object' || Array.isArray(v)) throw new Error('multi-unsupported');
+  return v;
 }
-// Legacy-shaped bulk save — used only by the one-time migration below.
-// Regular add/edit/delete/pin flows now write a single course row instead.
-async function saveCourses(list){
-  for(const c of list){
-    await saveCourse(c);
+
+// Run fn over items with at most `limit` requests in flight; any failure rejects.
+async function poolMap(items, limit, fn){
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker(){
+    while(true){
+      const i = next++;
+      if(i >= items.length) return;
+      results[i] = await fn(items[i]);
+    }
   }
+  await Promise.all(Array.from({length: Math.min(limit, items.length)}, worker));
+  return results;
+}
+
+function assembleCourses(bulk){
+  const index = Array.isArray(bulk['lms-course-index'])? bulk['lms-course-index'] : [];
+  const byId = {};
+  const rowOrder = [];
+  Object.keys(bulk).forEach(k=>{
+    if(k.indexOf(COURSE_PREFIX)!==0) return;
+    const v = bulk[k];
+    if(!v || typeof v!=='object' || v.deleted) return;
+    const id = k.slice(COURSE_PREFIX.length);
+    if(!v.id) v.id = id;
+    byId[id] = v; rowOrder.push(id);
+  });
+  const ordered = [];
+  index.forEach(id=>{ if(byId[id]){ ordered.push(byId[id]); delete byId[id]; } });
+  rowOrder.forEach(id=>{ if(byId[id]) ordered.push(byId[id]); });
+  return ordered;
+}
+
+// Legacy-shaped bulk save — used only by the one-time migration from the old single-cell format.
+async function saveCourses(list){
+  for(const c of list){ await saveCourse(c); }
   await saveCourseIndex(list.map(c=>c.id));
 }
-let __coursesMigrationChecked = false;
-async function migrateCoursesIfNeeded(){
-  if(__coursesMigrationChecked) return;
-  __coursesMigrationChecked = true;
+
+async function loadInitialData(){
+  let bulk = null;
   try{
-    const idx = await loadCourseIndex();
-    if(idx && idx.length) return; // already migrated
+    bulk = await apiMulti(['lms-staff','lms-progress','lms-admin-password','lms-locking-enabled','lms-course-index'], COURSE_PREFIX);
+  }catch(e){
+    if(!(e && e.message==='multi-unsupported')) throw e;
+  }
+  if(bulk){
+    let courses = assembleCourses(bulk);
+    if(!courses.length){
+      const legacy = await apiGet('lms-courses');
+      if(Array.isArray(legacy) && legacy.length){ await saveCourses(legacy); courses = legacy; }
+    }
+    return {
+      staff: Array.isArray(bulk['lms-staff'])? bulk['lms-staff'] : [],
+      courses,
+      progress: (bulk['lms-progress'] && typeof bulk['lms-progress']==='object')? bulk['lms-progress'] : {},
+      adminPassword: (typeof bulk['lms-admin-password']==='string')? bulk['lms-admin-password'] : 'admin123',
+      lockingEnabled: (typeof bulk['lms-locking-enabled']==='boolean')? bulk['lms-locking-enabled'] : true
+    };
+  }
+  // Fallback for the older Apps Script (no batch read): few requests at a time, and any failure is an error —
+  // never silently show a partial course list.
+  const [staff, progress, adminPassword, lockingEnabled, index] = await Promise.all([
+    loadStaff(), loadProgress(), loadAdminPassword(), loadLockingEnabled(), loadCourseIndex()
+  ]);
+  let courses = [];
+  if(index.length){
+    const rows = await poolMap(index, 3, id=>loadCourse(id));
+    courses = rows.filter(v=>v && typeof v==='object' && !v.deleted);
+  } else {
     const legacy = await apiGet('lms-courses');
-    if(!legacy || !legacy.length) return; // nothing to migrate
-    await saveCourses(legacy);
-  }catch(e){ console.error('課程資料搬移失敗,將於下次載入時重試', e); __coursesMigrationChecked = false; }
+    if(Array.isArray(legacy) && legacy.length){ await saveCourses(legacy); courses = legacy; }
+  }
+  return { staff, courses, progress, adminPassword, lockingEnabled };
 }
 
 async function loadProgress(){ const v = await apiGet('lms-progress'); return v===null? {} : v; }
@@ -298,14 +357,12 @@ async function initApp(skipWarning){
   }
   showLoadingGate();
   try{
-    const [staff, courses, progress, adminPassword, lockingEnabled] = await Promise.all([
-      loadStaff(), loadCourses(), loadProgress(), loadAdminPassword(), loadLockingEnabled()
-    ]);
-    STATE.staff = staff;
-    STATE.courses = courses;
-    STATE.progress = progress;
-    STATE.adminPassword = adminPassword;
-    STATE.lockingEnabled = lockingEnabled;
+    const data = await loadInitialData();
+    STATE.staff = data.staff;
+    STATE.courses = data.courses;
+    STATE.progress = data.progress;
+    STATE.adminPassword = data.adminPassword;
+    STATE.lockingEnabled = data.lockingEnabled;
   }catch(e){
     console.error('資料載入失敗', e);
     showLoadErrorGate();
@@ -1375,11 +1432,13 @@ async function submitNewCourse(btn){
   if(!f.targetDepts.length && !f.targetStaffIds.length){ if(!confirm('這堂課沒有指定任何「適用部門」或「適用人員」,所有人員都會看到。\n\n確定要這樣儲存嗎?\n(要指定對象,請按「取消」,到表單的「① 誰需要上這堂課」勾選)')) return; }
   const restore = lockBtn(btn, '儲存中...');
   const course = {id:uid(), title:f.title, desc:f.desc, referenceOnly:f.referenceOnly, prerequisiteIds:f.prerequisiteIds, notifyEmails:f.notifyEmails, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts, targetStaffIds:f.targetStaffIds, quizExemptDepts:f.quizExemptDepts, quizExemptStaffIds:f.quizExemptStaffIds, lockExemptDepts:f.lockExemptDepts, lockExemptStaffIds:f.lockExemptStaffIds};
-  let latest;
-  try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
-  latest.push(course);
-  STATE.courses = latest;
-  await saveCourses(STATE.courses);
+  try{ await saveCourse(course); }
+  catch(e){ alert('無法連線到資料庫,這堂課尚未儲存,請確認網路連線後再試一次。'); restore(); return; }
+  try{
+    const idx = await loadCourseIndex();
+    if(!idx.includes(course.id)){ idx.push(course.id); await saveCourseIndex(idx); }
+  }catch(e){ console.error('更新課程索引失敗(課程本身已儲存)', e); }
+  STATE.courses.push(course);
   STATE.selectedCourseId = course.id;
   document.getElementById('addCourseFormWrap').innerHTML='';
   render();
@@ -1392,30 +1451,32 @@ async function submitEditCourse(btn, id){
   if(__courseFormRequireVideo && !f.referenceOnly && f.videos.length===0){ alert('請至少新增一支有效的YouTube影片,或勾選「僅供參考資料」'); return; }
   if(!f.targetDepts.length && !f.targetStaffIds.length){ if(!confirm('這堂課沒有指定任何「適用部門」或「適用人員」,所有人員都會看到。\n\n確定要這樣儲存嗎?\n(要指定對象,請按「取消」,到表單的「① 誰需要上這堂課」勾選)')) return; }
   const restore = lockBtn(btn, '儲存中...');
-  let latest;
-  try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
-  const c = latest.find(x=>x.id===id);
-  if(!c){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
+  let c;
+  try{ c = await loadCourse(id); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
+  if(!c || c.deleted){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
   c.title = f.title; c.desc = f.desc; c.referenceOnly = f.referenceOnly; c.prerequisiteIds = f.prerequisiteIds; c.notifyEmails = f.notifyEmails;
   if(__courseFormRequireVideo){ c.videos = f.videos; c.videoUrl = f.videos[0]? f.videos[0].url:''; }
   c.quiz = f.quiz; c.materials = f.materials; c.targetDepts = f.targetDepts; c.targetStaffIds = f.targetStaffIds;
   c.quizExemptDepts = f.quizExemptDepts; c.quizExemptStaffIds = f.quizExemptStaffIds;
   c.lockExemptDepts = f.lockExemptDepts; c.lockExemptStaffIds = f.lockExemptStaffIds;
-  STATE.courses = latest;
-  await saveCourses(STATE.courses);
+  try{ await saveCourse(c); }
+  catch(e){ alert('無法連線到資料庫,修改尚未儲存,請確認網路連線後再試一次。'); restore(); return; }
+  const ci = STATE.courses.findIndex(x=>x.id===id);
+  if(ci>=0) STATE.courses[ci] = c; else STATE.courses.push(c);
   document.getElementById('addCourseFormWrap').innerHTML='';
   render();
 }
 
 async function togglePin(btn, id){
   const restore = lockBtn(btn, '處理中...');
-  let latest;
-  try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
-  const c = latest.find(x=>x.id===id);
-  if(!c){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
+  let c;
+  try{ c = await loadCourse(id); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
+  if(!c || c.deleted){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
   c.pinned = !c.pinned;
-  STATE.courses = latest;
-  await saveCourses(STATE.courses);
+  try{ await saveCourse(c); }
+  catch(e){ alert('無法連線到資料庫,尚未儲存,請確認網路連線後再試一次。'); restore(); return; }
+  const pi = STATE.courses.findIndex(x=>x.id===id);
+  if(pi>=0) STATE.courses[pi] = c;
   alert(c.pinned? '⭐ 已設為重要,將顯示在清單最上方!' : '已取消重要標記。');
   render();
 }
@@ -1423,10 +1484,16 @@ async function togglePin(btn, id){
 async function deleteCourse(btn, id){
   if(!confirm('確定要刪除此課程?')) return;
   const restore = lockBtn(btn, '刪除中...');
-  let latest;
-  try{ latest = await loadCourses(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
-  STATE.courses = latest.filter(c=>c.id!==id);
-  await saveCourses(STATE.courses);
+  try{
+    const c = (await loadCourse(id)) || {id:id};
+    c.deleted = true;
+    await saveCourse(c);
+  }catch(e){ alert('無法連線到資料庫,尚未刪除,請確認網路連線後再試一次。'); restore(); return; }
+  try{
+    const idx = await loadCourseIndex();
+    await saveCourseIndex(idx.filter(x=>x!==id));
+  }catch(e){ console.error('更新課程索引失敗(課程本身已標記刪除)', e); }
+  STATE.courses = STATE.courses.filter(c=>c.id!==id);
   STATE.selectedCourseId = STATE.courses[0]?.id || null;
   render();
 }

@@ -48,7 +48,7 @@
   .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--border);}
   .btn.small{padding:6px 10px;font-size:12px;}
 
-  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px;}
+  .grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px;margin-bottom:20px;}
   .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;}
   .stat-card .top{display:flex;justify-content:space-between;align-items:flex-start;}
   .stat-card .label{color:var(--sub);font-size:13px;}
@@ -835,7 +835,8 @@ async function toggleLocking(btn){
 
 function renderDashboard(){
   const totalStaff = STATE.staff.length;
-  const totalCourses = STATE.courses.length;
+  const totalCourses = STATE.courses.filter(c=>courseVideos(c).length>0).length;
+  const totalDocs = STATE.courses.length - totalCourses;
   let totalAssignments=0, totalCompleted=0, pendingQuiz=0;
   const notStartedByCourse = {};
   const pendingQuizByCourse = {};
@@ -864,7 +865,7 @@ function renderDashboard(){
     <div>
       <div class="date">${todayLabel()}</div>
       <h1>早安,${escapeHtml(u? u.name:'')}</h1>
-      <div class="muted">這裡是教育訓練的整體概況。共 ${totalCourses} 門課程,${pendingQuiz} 項測驗待完成。</div>
+      <div class="muted">這裡是教育訓練的整體概況。共 ${totalCourses} 堂課程、${totalDocs} 份文件資料,${pendingQuiz} 項測驗待完成。</div>
     </div>
     <button class="btn accent" onclick="goView('courses')">+ 前往課程</button>
   </div>
@@ -881,7 +882,8 @@ function renderDashboard(){
   `}
   <div class="grid4">
     <div class="card stat-card"><div class="top"><div class="label">人員總數</div><div class="icon">◎</div></div><div class="value">${totalStaff}</div></div>
-    <div class="card stat-card"><div class="top"><div class="label">課程總數</div><div class="icon">▣</div></div><div class="value">${totalCourses}</div></div>
+    <div class="card stat-card"><div class="top"><div class="label">課程總數(影片)</div><div class="icon">▣</div></div><div class="value">${totalCourses}</div></div>
+    <div class="card stat-card"><div class="top"><div class="label">文件資料總數</div><div class="icon">📄</div></div><div class="value">${totalDocs}</div></div>
     <div class="card stat-card"><div class="top"><div class="label">整體完成率</div><div class="icon">↗</div></div><div class="value">${rate}%</div></div>
     <div class="card stat-card"><div class="top"><div class="label">待完成測驗</div><div class="icon">!</div></div><div class="value">${pendingQuiz}</div></div>
   </div>

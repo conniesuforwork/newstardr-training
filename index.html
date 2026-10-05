@@ -774,6 +774,17 @@ function render(){
 }
 
 /* ---------- Dashboard ---------- */
+function listHeaderHtml(title, list, u, admin){
+  const total = list.length;
+  const required = list.filter(c=>!c.referenceOnly);
+  const done = required.filter(c=>isCourseComplete(u.id, c.id)).length;
+  const refCount = total - required.length;
+  const summary = admin
+    ? `共 ${total} 項`
+    : `共 ${total} 項 · 需完成 ${required.length} 項,已完成 ${done} 項${refCount? `(另有 ${refCount} 項僅供參考)`:''}`;
+  return `<div class="section-title" style="margin-top:0;margin-bottom:4px;">${title}</div><div class="muted" style="margin-bottom:12px;">${summary}</div>`;
+}
+
 function prereqBadgeHtml(c, admin){
   if(!admin) return '';
   const ids = coursePrerequisiteIds(c);
@@ -974,15 +985,15 @@ function renderCourses(){
       `) : `<div class="card empty">${admin? '尚未選擇課程,請先新增或於右側選擇。' : '目前沒有指派給您的課程。'}</div>`}
     </div>
     <div class="card">
-      <div class="section-title" style="margin-top:0;">課程清單</div>
+      ${listHeaderHtml('課程清單', visibleCourses, u, admin)}
       <div class="course-list">
-        ${visibleCourses.map(c=>{
+        ${visibleCourses.map((c, idx)=>{
           const p = userProgress(u.id)[c.id];
           const complete = isCourseComplete(u.id, c.id);
           const vc = courseVideos(c).length;
           const cLocked = !admin && isCourseLocked(u.id, c);
           return `<div class="course-item ${c.id===STATE.selectedCourseId?'selected':''}" onclick="selectCourse('${c.id}')">
-            <div><h4>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (p&&p.watched?'已觀看':'未觀看')} ${vc>1? '· '+vc+' 支影片':''} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''} ${prereqBadgeHtml(c, admin)}</p></div>
+            <div><h4><span style="color:var(--accent);margin-right:6px;">${idx+1}.</span>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (p&&p.watched?'已觀看':'未觀看')} ${vc>1? '· '+vc+' 支影片':''} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''} ${prereqBadgeHtml(c, admin)}</p></div>
             <span class="pill ${cLocked?'off':(complete?'ok':(p?'warn':'off'))}">${cLocked?'鎖定':(complete?'完成':(p?'待測驗':'未開始'))}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無課程</div>'}
@@ -1052,14 +1063,14 @@ function renderDocuments(){
       `) : `<div class="card empty">${admin? '尚未選擇文件資料,請先新增或於右側選擇。' : '目前沒有指派給您的文件資料。'}</div>`}
     </div>
     <div class="card">
-      <div class="section-title" style="margin-top:0;">文件清單</div>
+      ${listHeaderHtml('文件清單', visibleDocs, u, admin)}
       <div class="course-list">
-        ${visibleDocs.map(c=>{
+        ${visibleDocs.map((c, idx)=>{
           const p = userProgress(u.id)[c.id];
           const complete = isCourseComplete(u.id, c.id);
           const cLocked = !admin && isCourseLocked(u.id, c);
           return `<div class="course-item ${c.id===STATE.selectedCourseId?'selected':''}" onclick="selectCourse('${c.id}')">
-            <div><h4>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (c.materials&&c.materials.length? c.materials.length+' 份文件':'')} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''} ${prereqBadgeHtml(c, admin)}</p></div>
+            <div><h4><span style="color:var(--accent);margin-right:6px;">${idx+1}.</span>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (c.materials&&c.materials.length? c.materials.length+' 份文件':'')} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''} ${prereqBadgeHtml(c, admin)}</p></div>
             <span class="pill ${cLocked?'off':(complete?'ok':(p?'warn':'off'))}">${cLocked?'鎖定':(complete?'完成':(p?'待測驗':'未開始'))}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無文件資料</div>'}

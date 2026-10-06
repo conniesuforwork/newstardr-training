@@ -181,7 +181,13 @@ function xhrPost(url, data){
     const xhr = new XMLHttpRequest();
     xhr.open('POST', url, true);
     const timer = setTimeout(()=>{ xhr.abort(); reject(new Error('timeout')); }, 12000);
-    xhr.onload = ()=>{ clearTimeout(timer); resolve(xhr.responseText); };
+    xhr.onload = ()=>{
+      clearTimeout(timer);
+      const t = xhr.responseText || '';
+      // Apps Script answers {"status":"ok"} on success; an error page (e.g. cell too large) must NOT count as saved.
+      if(xhr.status>=200 && xhr.status<300 && (t==='' || /"status"\s*:\s*"ok"/.test(t))) resolve(t);
+      else reject(new Error('write-failed'));
+    };
     xhr.onerror = ()=>{ clearTimeout(timer); reject(new Error('network error')); };
     xhr.send(JSON.stringify(data));
   });
@@ -220,12 +226,11 @@ async function saveCourseIndex(ids){ await apiSet('lms-course-index', ids); }
 async function loadCourse(id){ return await apiGet(COURSE_PREFIX+id); }
 async function saveCourse(course){ await apiSet(COURSE_PREFIX+course.id, course); }
 
-// One request that returns many rows at once (needs the updated Apps Script).
-async function apiMulti(keys, prefix){
-  const params = { action:'multi', keys: keys.join(',') };
-  if(prefix) params.prefix = prefix;
+// One request that returns many rows at once (needs the updated Apps Script, which tags its reply with __v:2).
+async function apiMulti(keys, prefixes){
+  const params = { action:'multi', keys: keys.join(','), prefixes: prefixes.join(',') };
   const v = await jsonpRequestWithRetry(params);
-  if(v===null || typeof v!=='object' || Array.isArray(v)) throw new Error('multi-unsupported');
+  if(!v || typeof v!=='object' || Array.isArray(v) || !(v.__v>=2)) throw new Error('multi-unsupported');
   return v;
 }
 
@@ -268,31 +273,113 @@ async function saveCourses(list){
   await saveCourseIndex(list.map(c=>c.id));
 }
 
+/* Progress: stored one row per person (key "lms-progress:<staffId>") so nobody's save can overwrite
+   anybody else's, and no cell can reach the 50,000-character limit. */
+const PROGRESS_PREFIX = 'lms-progress:';
+async function loadStaffProgress(staffId){
+  const v = await apiGet(PROGRESS_PREFIX+staffId);
+  return (v && typeof v==='object' && !Array.isArray(v))? v : {};
+}
+async function saveStaffProgress(staffId, obj){ await apiSet(PROGRESS_PREFIX+staffId, obj); }
+
+// Quiz attempts are stored compactly (answers + right/wrong), not with full question text.
+function quizSig(quiz){
+  const s = JSON.stringify((quiz||[]).map(q=>[q.q, q.options, q.answer]));
+  let h = 5381;
+  for(let i=0;i<s.length;i++){ h = ((h<<5)+h+s.charCodeAt(i))|0; }
+  return (h>>>0).toString(36);
+}
+function compactCourseProgress(p){
+  const q = Object.assign({}, p);
+  let hist = Array.isArray(q.quizHistory)? q.quizHistory.slice() : [];
+  if(!hist.length && q.quizDetails){
+    hist = [{score:q.quizScore, passed:q.quizPassed, submittedAt:q.quizSubmittedAt, details:q.quizDetails}];
+  }
+  q.quizHistory = hist.map(h=>{
+    if(!h.details) return h;
+    const d = h.details;
+    return {
+      score:h.score, passed:h.passed, submittedAt:h.submittedAt,
+      answers: d.map(x=>(x.selected===undefined? null : x.selected)),
+      ok: d.map(x=>x.isCorrect? 1:0),
+      qsig: quizSig(d.map(x=>({q:x.q, options:x.options, answer:x.correct})))
+    };
+  });
+  delete q.quizDetails;
+  if(!q.quizHistory.length) delete q.quizHistory;
+  return q;
+}
+function compactStaffProgress(obj){
+  const out = {};
+  Object.keys(obj||{}).forEach(k=>{
+    const v = obj[k];
+    out[k] = (v && typeof v==='object' && !Array.isArray(v))? compactCourseProgress(v) : v;
+  });
+  return out;
+}
+// Rebuild question-by-question details for one stored attempt.
+function attemptDetails(course, h){
+  if(h.details) return h.details; // older full-detail record
+  const quiz = (course && course.quiz) || [];
+  const sameQuiz = !!(h.qsig && course && quizSig(quiz)===h.qsig);
+  return (h.answers||[]).map((sel,i)=>{
+    if(sameQuiz && quiz[i]) return {q:quiz[i].q, options:quiz[i].options, selected:sel, correct:quiz[i].answer, isCorrect: sel===quiz[i].answer};
+    return {q:'第 '+(i+1)+' 題(題目後來有修改,僅保留對錯)', options:[], selected:sel, correct:null, isCorrect: !!(h.ok && h.ok[i])};
+  });
+}
+
+// One-time move from the old single-cell progress to per-person rows.
+async function migrateLegacyProgress(staffList){
+  const legacy = await apiGet('lms-progress');
+  const out = {};
+  if(legacy && typeof legacy==='object' && !Array.isArray(legacy)){
+    for(const s of staffList){
+      if(legacy[s.id]) out[s.id] = compactStaffProgress(legacy[s.id]);
+    }
+    for(const sid of Object.keys(out)){ await saveStaffProgress(sid, out[sid]); }
+  }
+  await apiSet('lms-progress-split', true);
+  return out;
+}
+
 async function loadInitialData(){
   let bulk = null;
   try{
-    bulk = await apiMulti(['lms-staff','lms-progress','lms-admin-password','lms-locking-enabled','lms-course-index'], COURSE_PREFIX);
+    bulk = await apiMulti(
+      ['lms-staff','lms-admin-password','lms-locking-enabled','lms-course-index','lms-progress-split'],
+      [COURSE_PREFIX, PROGRESS_PREFIX]
+    );
   }catch(e){
     if(!(e && e.message==='multi-unsupported')) throw e;
   }
   if(bulk){
+    const staff = Array.isArray(bulk['lms-staff'])? bulk['lms-staff'] : [];
     let courses = assembleCourses(bulk);
-    if(!courses.length){
+    // legacy course migration only if the course index has never existed
+    if(!courses.length && bulk['lms-course-index']===undefined){
       const legacy = await apiGet('lms-courses');
       if(Array.isArray(legacy) && legacy.length){ await saveCourses(legacy); courses = legacy; }
     }
+    let progress = {};
+    if(bulk['lms-progress-split']===true){
+      Object.keys(bulk).forEach(k=>{
+        if(k.indexOf(PROGRESS_PREFIX)!==0) return;
+        const v = bulk[k];
+        if(v && typeof v==='object') progress[k.slice(PROGRESS_PREFIX.length)] = v;
+      });
+    } else {
+      progress = await migrateLegacyProgress(staff);
+    }
     return {
-      staff: Array.isArray(bulk['lms-staff'])? bulk['lms-staff'] : [],
-      courses,
-      progress: (bulk['lms-progress'] && typeof bulk['lms-progress']==='object')? bulk['lms-progress'] : {},
+      staff, courses, progress,
       adminPassword: (typeof bulk['lms-admin-password']==='string')? bulk['lms-admin-password'] : 'admin123',
       lockingEnabled: (typeof bulk['lms-locking-enabled']==='boolean')? bulk['lms-locking-enabled'] : true
     };
   }
   // Fallback for the older Apps Script (no batch read): few requests at a time, and any failure is an error —
-  // never silently show a partial course list.
-  const [staff, progress, adminPassword, lockingEnabled, index] = await Promise.all([
-    loadStaff(), loadProgress(), loadAdminPassword(), loadLockingEnabled(), loadCourseIndex()
+  // never silently show a partial list.
+  const [staff, adminPassword, lockingEnabled, index, split] = await Promise.all([
+    loadStaff(), loadAdminPassword(), loadLockingEnabled(), loadCourseIndex(), apiGet('lms-progress-split')
   ]);
   let courses = [];
   if(index.length){
@@ -302,11 +389,16 @@ async function loadInitialData(){
     const legacy = await apiGet('lms-courses');
     if(Array.isArray(legacy) && legacy.length){ await saveCourses(legacy); courses = legacy; }
   }
+  let progress = {};
+  if(split===true){
+    const rows = await poolMap(staff, 3, s=>loadStaffProgress(s.id));
+    staff.forEach((s,i)=>{ progress[s.id] = rows[i]; });
+  } else {
+    progress = await migrateLegacyProgress(staff);
+  }
   return { staff, courses, progress, adminPassword, lockingEnabled };
 }
 
-async function loadProgress(){ const v = await apiGet('lms-progress'); return v===null? {} : v; }
-async function saveProgress(obj){ await apiSet('lms-progress', obj); }
 async function loadCurrentUser(){ return storageGet('lms-current-user', null); }
 async function saveCurrentUser(id){ storageSet('lms-current-user', id); }
 async function loadAdminPassword(){ const v = await apiGet('lms-admin-password'); return v===null? 'admin123' : v; }
@@ -691,7 +783,7 @@ function showQuizAttemptDetail(staffId, courseId, idx){
   if(!s || !course || !h) return;
   const body = `
     <button class="btn ghost small" style="margin-bottom:14px;" onclick="renderQuizHistoryModal('${staffId}','${courseId}')">← 返回歷史列表</button>
-    ${h.details.map((d,i)=>`
+    ${attemptDetails(course, h).map((d,i)=>`
       <div class="quiz-q" style="border-color:${d.isCorrect?'var(--border)':'#c98f7c'};">
         <div style="font-weight:600;margin-bottom:6px;">${i+1}. ${escapeHtml(d.q)} ${d.isCorrect? '<span class="pill ok" style="margin-left:6px;">答對</span>' : '<span class="pill" style="background:#f3e4de;color:#b06a54;margin-left:6px;">答錯</span>'}</div>
         ${d.options.map((opt,oi)=>{
@@ -717,11 +809,10 @@ function fmtTime(iso){
 }
 async function recordLastLogin(staffId){
   try{
-    const latest = await loadProgress();
-    if(!latest[staffId]) latest[staffId] = {};
-    latest[staffId]._lastLogin = new Date().toISOString();
-    STATE.progress = latest;
-    await saveProgress(STATE.progress);
+    const mine = STATE.progress[staffId] || {};
+    mine._lastLogin = new Date().toISOString();
+    STATE.progress[staffId] = mine;
+    await saveStaffProgress(staffId, mine);
   }catch(e){ console.error('記錄登入時間失敗', e); }
 }
 function coursesForStaff(staffObj){
@@ -763,7 +854,7 @@ function courseRosterTableHtml(course, watchedLabel){
             else if(p && p.quizPassed) quizStatus = `<span class="pill ok">已通過(${p.quizScore}分)</span>`;
             else if(p && typeof p.quizScore==='number') quizStatus = `<span class="pill warn">未通過(${p.quizScore}分)</span>`;
             else quizStatus = '<span class="pill off">未測驗</span>';
-            if(p && p.quizDetails && p.quizDetails.length){
+            if(getQuizHistory(s.id, course.id).length){
               quizStatus += ` <button class="icon-btn" onclick="showQuizDetailModal('${s.id}','${course.id}')">查看詳情</button>`;
             }
             const complete = isCourseComplete(s.id, course.id);
@@ -1567,14 +1658,14 @@ let watchTimer = null;
 async function markReadComplete(btn, courseId){
   const u = currentUser();
   const restore = lockBtn(btn, '儲存中...');
-  let latest;
-  try{ latest = await loadProgress(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
-  if(!latest[u.id]) latest[u.id] = {};
-  if(!latest[u.id][courseId]) latest[u.id][courseId] = {watchSeconds:0, watched:false, quizPassed:false};
-  latest[u.id][courseId].watched = true;
-  latest[u.id][courseId].lastWatchedAt = new Date().toISOString();
-  STATE.progress = latest;
-  await saveProgress(STATE.progress);
+  let mine;
+  try{ mine = await loadStaffProgress(u.id); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
+  if(!mine[courseId]) mine[courseId] = {watchSeconds:0, watched:false, quizPassed:false};
+  mine[courseId].watched = true;
+  mine[courseId].lastWatchedAt = new Date().toISOString();
+  try{ await saveStaffProgress(u.id, mine); }
+  catch(e){ alert('無法連線到資料庫,這次的紀錄尚未儲存,請確認網路連線後再按一次。'); restore(); return; }
+  STATE.progress[u.id] = mine;
   alert('✓ 已標記為完成閱讀!');
   render();
 }
@@ -1612,39 +1703,40 @@ async function onPlayerStateChange(e){
     }
   }
 }
+let __watchSaving = false;
 async function addWatchSeconds(sec, forceWatched){
   const u = currentUser();
   const cid = STATE.selectedCourseId;
   if(!u || !cid) return;
-  let latest;
-  try{ latest = await loadProgress(); }
-  catch(e){ console.error('進度同步失敗,將於下次儲存時補上', e); return; }
-  if(!latest[u.id]) latest[u.id] = {};
-  if(!latest[u.id][cid]) latest[u.id][cid] = {watchSeconds:0, watched:false, quizPassed:false};
-  latest[u.id][cid].watchSeconds = (latest[u.id][cid].watchSeconds||0) + sec;
-  latest[u.id][cid].lastWatchedAt = new Date().toISOString();
-  const justWatched = !latest[u.id][cid].watched && (latest[u.id][cid].watchSeconds >= 20 || forceWatched);
-  if(latest[u.id][cid].watchSeconds >= 20 || forceWatched) latest[u.id][cid].watched = true;
-  STATE.progress = latest;
-  await saveProgress(STATE.progress);
+  const mine = STATE.progress[u.id] || (STATE.progress[u.id] = {});
+  if(!mine[cid]) mine[cid] = {watchSeconds:0, watched:false, quizPassed:false};
+  const p = mine[cid];
+  p.watchSeconds = (p.watchSeconds||0) + sec;
+  p.lastWatchedAt = new Date().toISOString();
+  const justWatched = !p.watched && (p.watchSeconds >= 20 || forceWatched);
+  if(p.watchSeconds >= 20 || forceWatched) p.watched = true;
   // Update the on-screen label/pill directly — do NOT call render() here,
   // it would destroy and recreate the YouTube player mid-playback.
   const label = document.getElementById('watchTimeLabel');
   if(label){
-    const p = latest[u.id][cid];
     label.textContent = `累計觀看時間:${Math.floor((p.watchSeconds||0)/60)} 分 ${Math.floor((p.watchSeconds||0)%60)} 秒`;
   }
   if(justWatched){
     const pillWrap = document.getElementById('watchedPillWrap');
     if(pillWrap){
       const course = STATE.courses.find(c=>c.id===cid);
-      const p = latest[u.id][cid];
       pillWrap.innerHTML = `
         <span class="pill ok">已觀看</span>
         ${p.quizPassed? '<span class="pill ok">測驗通過</span>' : (course && course.quiz && course.quiz.length? '<span class="pill warn">待測驗</span>':'')}
       `;
     }
   }
+  // Save this person's own row. Progress keeps accumulating in memory, so a failed save is retried with the next tick.
+  if(__watchSaving && !forceWatched) return;
+  __watchSaving = true;
+  try{ await saveStaffProgress(u.id, mine); }
+  catch(e){ console.error('進度儲存失敗,將於下次自動重試', e); }
+  finally{ __watchSaving = false; }
 }
 
 function goToQuiz(courseId){
@@ -1755,21 +1847,27 @@ async function submitQuiz(btn, courseId){
   const score = Math.round(correct/total*100);
   const passed = score >= 70;
   const restore = lockBtn(btn, '送出中...');
-  let latest;
-  try{ latest = await loadProgress(); }catch(e){ alert('無法連線到資料庫,測驗結果尚未儲存,請確認網路連線後重新送出。'); restore(); return; }
-  if(!latest[u.id]) latest[u.id] = {};
-  if(!latest[u.id][courseId]) latest[u.id][courseId] = {watchSeconds:0, watched:false, quizPassed:false};
+  let mine;
+  try{ mine = await loadStaffProgress(u.id); }catch(e){ alert('無法連線到資料庫,測驗結果尚未儲存,請確認網路連線後重新送出。'); restore(); return; }
+  if(!mine[courseId]) mine[courseId] = {watchSeconds:0, watched:false, quizPassed:false};
+  const p = mine[courseId];
   const submittedAt = new Date().toISOString();
-  latest[u.id][courseId].quizScore = score;
-  latest[u.id][courseId].quizPassed = passed;
-  latest[u.id][courseId].quizSubmittedAt = submittedAt;
-  latest[u.id][courseId].quizDetails = details;
-  const history = latest[u.id][courseId].quizHistory || [];
-  history.push({score, passed, submittedAt, details});
+  p.quizScore = score;
+  p.quizPassed = passed;
+  p.quizSubmittedAt = submittedAt;
+  delete p.quizDetails;
+  const history = (p.quizHistory || []).slice();
+  history.push({
+    score, passed, submittedAt,
+    answers: details.map(d=>(d.selected===undefined? null : d.selected)),
+    ok: details.map(d=>d.isCorrect? 1:0),
+    qsig: quizSig(course.quiz)
+  });
   const oneYearAgo = Date.now() - 365*24*60*60*1000;
-  latest[u.id][courseId].quizHistory = history.filter(h=> new Date(h.submittedAt).getTime() >= oneYearAgo);
-  STATE.progress = latest;
-  await saveProgress(STATE.progress);
+  p.quizHistory = history.filter(h=> new Date(h.submittedAt).getTime() >= oneYearAgo);
+  try{ await saveStaffProgress(u.id, mine); }
+  catch(e){ alert('無法連線到資料庫,測驗結果尚未儲存,請確認網路連線後重新送出。'); restore(); return; }
+  STATE.progress[u.id] = mine;
   STATE.quizResult = {courseId, correct, total, score, passed, details};
   render();
 }
@@ -1924,13 +2022,12 @@ async function deleteStaff(btn, id){
   if(STATE.staff.length<=1){ alert('至少需保留一位人員'); return; }
   if(!confirm('確定刪除此人員?學習紀錄將一併移除。')) return;
   const restore = lockBtn(btn, '刪除中...');
-  let latest, latestProgress;
-  try{ latest = await loadStaff(); latestProgress = await loadProgress(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
+  let latest;
+  try{ latest = await loadStaff(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   STATE.staff = latest.filter(s=>s.id!==id);
-  delete latestProgress[id];
-  STATE.progress = latestProgress;
+  delete STATE.progress[id];
   await saveStaff(STATE.staff);
-  await saveProgress(STATE.progress);
+  try{ await saveStaffProgress(id, {}); }catch(e){ console.error('清除學習紀錄失敗', e); }
   if(STATE.currentUserId===id){ STATE.currentUserId = STATE.staff[0].id; await saveCurrentUser(STATE.currentUserId); }
   renderCurrentUserDisplay();
   updateNavVisibility();

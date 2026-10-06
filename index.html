@@ -151,11 +151,11 @@ function storageSet(key, value){
 /* Shared backend: Google Apps Script + Google Sheet */
 const API_URL = 'https://script.google.com/macros/s/AKfycbzECIWlnmrXBzrZUNwLVyxF7geQMGJK-QddoeWCzd5WtEDMdixD3sKhKKKYT2owa5LJcQ/exec';
 let __jsonpCounter = 0;
-function jsonpRequest(params){
+function jsonpRequest(params, ms){
   return new Promise((resolve, reject)=>{
     const cbName = 'lms_cb_' + (__jsonpCounter++) + '_' + Date.now();
     const script = document.createElement('script');
-    const timeout = setTimeout(()=>{ cleanup(); reject(new Error('timeout')); }, 10000);
+    const timeout = setTimeout(()=>{ window[cbName] = function(){}; script.remove(); reject(new Error('timeout')); }, ms || 10000);
     function cleanup(){ clearTimeout(timeout); delete window[cbName]; script.remove(); }
     window[cbName] = (data)=>{ cleanup(); resolve(data); };
     const qs = new URLSearchParams(Object.assign({}, params, { callback: cbName })).toString();
@@ -164,14 +164,14 @@ function jsonpRequest(params){
     document.body.appendChild(script);
   });
 }
-async function jsonpRequestWithRetry(params, retries){
+async function jsonpRequestWithRetry(params, retries, ms){
   retries = (retries===undefined)? 2 : retries;
   try{
-    return await jsonpRequest(params);
+    return await jsonpRequest(params, ms);
   }catch(e){
     if(retries > 0){
       await new Promise(r=>setTimeout(r, 700));
-      return jsonpRequestWithRetry(params, retries-1);
+      return jsonpRequestWithRetry(params, retries-1, ms);
     }
     throw e;
   }
@@ -180,7 +180,7 @@ function xhrPost(url, data){
   return new Promise((resolve, reject)=>{
     const xhr = new XMLHttpRequest();
     xhr.open('POST', url, true);
-    const timer = setTimeout(()=>{ xhr.abort(); reject(new Error('timeout')); }, 12000);
+    const timer = setTimeout(()=>{ xhr.abort(); reject(new Error('timeout')); }, 20000);
     xhr.onload = ()=>{
       clearTimeout(timer);
       const t = xhr.responseText || '';
@@ -193,7 +193,7 @@ function xhrPost(url, data){
   });
 }
 async function xhrPostWithRetry(url, data, retries){
-  retries = (retries===undefined)? 2 : retries;
+  retries = (retries===undefined)? 1 : retries;
   try{
     return await xhrPost(url, data);
   }catch(e){
@@ -229,7 +229,7 @@ async function saveCourse(course){ await apiSet(COURSE_PREFIX+course.id, course)
 // One request that returns many rows at once (needs the updated Apps Script, which tags its reply with __v:2).
 async function apiMulti(keys, prefixes){
   const params = { action:'multi', keys: keys.join(','), prefixes: prefixes.join(',') };
-  const v = await jsonpRequestWithRetry(params);
+  const v = await jsonpRequestWithRetry(params, 1, 30000);
   if(!v || typeof v!=='object' || Array.isArray(v) || !(v.__v>=2)) throw new Error('multi-unsupported');
   return v;
 }
@@ -328,25 +328,33 @@ function attemptDetails(course, h){
   });
 }
 
-// One-time move from the old single-cell progress to per-person rows.
-async function migrateLegacyProgress(staffList){
-  const legacy = await apiGet('lms-progress');
+// Per-person progress: use the person's own row if it exists, otherwise start from their record in the
+// old single-cell progress (converted in memory). Their own row is created the first time they save anything,
+// so there is no big one-time move and nothing is written while the page loads.
+function buildProgress(staffList, rows, legacy){
   const out = {};
-  if(legacy && typeof legacy==='object' && !Array.isArray(legacy)){
-    for(const s of staffList){
-      if(legacy[s.id]) out[s.id] = compactStaffProgress(legacy[s.id]);
-    }
-    for(const sid of Object.keys(out)){ await saveStaffProgress(sid, out[sid]); }
-  }
-  await apiSet('lms-progress-split', true);
+  staffList.forEach(s=>{
+    if(rows[s.id]) out[s.id] = rows[s.id];
+    else if(legacy && typeof legacy==='object' && !Array.isArray(legacy) && legacy[s.id]) out[s.id] = compactStaffProgress(legacy[s.id]);
+    else out[s.id] = {};
+  });
   return out;
 }
+// A person's latest saved progress for read-modify-write; if they have no row yet, start from what is in memory
+// (which already includes their old records) instead of an empty object.
+async function fetchOwnProgress(staffId){
+  const v = await apiGet(PROGRESS_PREFIX+staffId);
+  if(v && typeof v==='object' && !Array.isArray(v)) return v;
+  return STATE.progress[staffId]? JSON.parse(JSON.stringify(STATE.progress[staffId])) : {};
+}
 
+let __loadStage = '';
 async function loadInitialData(){
   let bulk = null;
+  __loadStage = '一次讀取全部資料';
   try{
     bulk = await apiMulti(
-      ['lms-staff','lms-admin-password','lms-locking-enabled','lms-course-index','lms-progress-split'],
+      ['lms-staff','lms-admin-password','lms-locking-enabled','lms-course-index','lms-progress'],
       [COURSE_PREFIX, PROGRESS_PREFIX]
     );
   }catch(e){
@@ -355,32 +363,32 @@ async function loadInitialData(){
   if(bulk){
     const staff = Array.isArray(bulk['lms-staff'])? bulk['lms-staff'] : [];
     let courses = assembleCourses(bulk);
-    // legacy course migration only if the course index has never existed
+    // very first run only: if the course index has never existed, bring over the oldest single-cell course list
     if(!courses.length && bulk['lms-course-index']===undefined){
+      __loadStage = '搬移舊課程資料';
       const legacy = await apiGet('lms-courses');
       if(Array.isArray(legacy) && legacy.length){ await saveCourses(legacy); courses = legacy; }
     }
-    let progress = {};
-    if(bulk['lms-progress-split']===true){
-      Object.keys(bulk).forEach(k=>{
-        if(k.indexOf(PROGRESS_PREFIX)!==0) return;
-        const v = bulk[k];
-        if(v && typeof v==='object') progress[k.slice(PROGRESS_PREFIX.length)] = v;
-      });
-    } else {
-      progress = await migrateLegacyProgress(staff);
-    }
+    const rows = {};
+    Object.keys(bulk).forEach(k=>{
+      if(k.indexOf(PROGRESS_PREFIX)!==0) return;
+      const v = bulk[k];
+      if(v && typeof v==='object') rows[k.slice(PROGRESS_PREFIX.length)] = v;
+    });
     return {
-      staff, courses, progress,
+      staff, courses,
+      progress: buildProgress(staff, rows, bulk['lms-progress']),
       adminPassword: (typeof bulk['lms-admin-password']==='string')? bulk['lms-admin-password'] : 'admin123',
       lockingEnabled: (typeof bulk['lms-locking-enabled']==='boolean')? bulk['lms-locking-enabled'] : true
     };
   }
-  // Fallback for the older Apps Script (no batch read): few requests at a time, and any failure is an error —
+  // Fallback for the older Apps Script (no one-shot read): few requests at a time, and any failure is an error —
   // never silently show a partial list.
-  const [staff, adminPassword, lockingEnabled, index, split] = await Promise.all([
-    loadStaff(), loadAdminPassword(), loadLockingEnabled(), loadCourseIndex(), apiGet('lms-progress-split')
+  __loadStage = '讀取基本資料(相容模式)';
+  const [staff, adminPassword, lockingEnabled, index, legacyProgress] = await Promise.all([
+    loadStaff(), loadAdminPassword(), loadLockingEnabled(), loadCourseIndex(), apiGet('lms-progress')
   ]);
+  __loadStage = '讀取課程(相容模式)';
   let courses = [];
   if(index.length){
     const rows = await poolMap(index, 3, id=>loadCourse(id));
@@ -389,14 +397,11 @@ async function loadInitialData(){
     const legacy = await apiGet('lms-courses');
     if(Array.isArray(legacy) && legacy.length){ await saveCourses(legacy); courses = legacy; }
   }
-  let progress = {};
-  if(split===true){
-    const rows = await poolMap(staff, 3, s=>loadStaffProgress(s.id));
-    staff.forEach((s,i)=>{ progress[s.id] = rows[i]; });
-  } else {
-    progress = await migrateLegacyProgress(staff);
-  }
-  return { staff, courses, progress, adminPassword, lockingEnabled };
+  __loadStage = '讀取個人進度(相容模式)';
+  const arr = await poolMap(staff, 3, s=>apiGet(PROGRESS_PREFIX+s.id));
+  const rows = {};
+  staff.forEach((s,i)=>{ const v = arr[i]; if(v && typeof v==='object' && !Array.isArray(v)) rows[s.id] = v; });
+  return { staff, courses, progress: buildProgress(staff, rows, legacyProgress), adminPassword, lockingEnabled };
 }
 
 async function loadCurrentUser(){ return storageGet('lms-current-user', null); }
@@ -457,7 +462,7 @@ async function initApp(skipWarning){
     STATE.lockingEnabled = data.lockingEnabled;
   }catch(e){
     console.error('資料載入失敗', e);
-    showLoadErrorGate();
+    showLoadErrorGate(e);
     return;
   }
   const lastUserId = await loadCurrentUser();
@@ -479,7 +484,7 @@ function showLoadingGate(){
   gate.innerHTML = `<div class="login-card"><div class="login-logo">欣</div><h2>載入中</h2><div class="muted">正在連線資料庫,請稍候...</div></div>`;
 }
 
-function showLoadErrorGate(){
+function showLoadErrorGate(err){
   const gate = document.getElementById('loginGate');
   gate.style.display = 'flex';
   document.querySelector('.app').style.display = 'none';
@@ -489,6 +494,7 @@ function showLoadErrorGate(){
       <h2>連線失敗</h2>
       <div class="muted">無法連線到資料庫,可能是網路不穩定或Google服務暫時延遲。請確認網路連線後重新整理頁面,您的資料不會受影響。</div>
       <button class="btn accent" style="width:100%;margin-top:16px;" onclick="location.reload()">重新整理</button>
+      <div class="muted" style="font-size:11px;margin-top:12px;word-break:break-all;">錯誤代碼:${escapeHtml(__loadStage||'未知步驟')} / ${escapeHtml(String((err && err.message) || err || '未知'))}</div>
     </div>
   `;
 }
@@ -1659,7 +1665,7 @@ async function markReadComplete(btn, courseId){
   const u = currentUser();
   const restore = lockBtn(btn, '儲存中...');
   let mine;
-  try{ mine = await loadStaffProgress(u.id); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
+  try{ mine = await fetchOwnProgress(u.id); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   if(!mine[courseId]) mine[courseId] = {watchSeconds:0, watched:false, quizPassed:false};
   mine[courseId].watched = true;
   mine[courseId].lastWatchedAt = new Date().toISOString();
@@ -1848,7 +1854,7 @@ async function submitQuiz(btn, courseId){
   const passed = score >= 70;
   const restore = lockBtn(btn, '送出中...');
   let mine;
-  try{ mine = await loadStaffProgress(u.id); }catch(e){ alert('無法連線到資料庫,測驗結果尚未儲存,請確認網路連線後重新送出。'); restore(); return; }
+  try{ mine = await fetchOwnProgress(u.id); }catch(e){ alert('無法連線到資料庫,測驗結果尚未儲存,請確認網路連線後重新送出。'); restore(); return; }
   if(!mine[courseId]) mine[courseId] = {watchSeconds:0, watched:false, quizPassed:false};
   const p = mine[courseId];
   const submittedAt = new Date().toISOString();

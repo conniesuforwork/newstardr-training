@@ -459,6 +459,29 @@ function staffSubCategory(s){
   if(!parts.length) return '未分類';
   return parts.length>1 ? parts.slice(1).join(' ') : parts[0];
 }
+// Groups people by department, then by position, so everyone with the same role sits together.
+// Departments/positions keep the order they first appeared in; admins come first; within a group the original order is kept.
+function sortedStaff(list){
+  const src = list || STATE.staff;
+  const deptOrder = [];
+  const subOrder = {};
+  STATE.staff.forEach(s=>{
+    const d = staffDept(s), sc = staffSubCategory(s);
+    if(!deptOrder.includes(d)) deptOrder.push(d);
+    if(!subOrder[d]) subOrder[d] = [];
+    if(!subOrder[d].includes(sc)) subOrder[d].push(sc);
+  });
+  const rank = d => d==='管理部' ? -1 : deptOrder.indexOf(d);
+  return src.map((s,i)=>({s,i})).sort((a,b)=>{
+    const da = staffDept(a.s), db = staffDept(b.s);
+    if(da!==db) return rank(da)-rank(db);
+    const sa = (subOrder[da]||[]).indexOf(staffSubCategory(a.s));
+    const sb = (subOrder[db]||[]).indexOf(staffSubCategory(b.s));
+    if(sa!==sb) return sa-sb;
+    return a.i-b.i;
+  }).map(x=>x.s);
+}
+
 function loginDepartments(){
   const set = new Set(STATE.staff.map(staffDept));
   const arr = Array.from(set);
@@ -724,7 +747,7 @@ function staffForCourse(course){
   });
 }
 function courseRosterTableHtml(course, watchedLabel){
-  const roster = staffForCourse(course);
+  const roster = sortedStaff(staffForCourse(course));
   return `
     <div class="card" style="margin-top:20px;">
       <div class="section-title" style="margin-top:0;">課程名單:${escapeHtml(course.title)}</div>
@@ -1729,7 +1752,7 @@ function renderStaff(){
     <table>
       <thead><tr><th>姓名</th><th>部門/職稱</th><th>Email</th><th>身分</th><th>最後登入</th><th>整體完成率</th><th></th></tr></thead>
       <tbody>
-        ${STATE.staff.map(s=>{
+        ${sortedStaff().map(s=>{
           const myCourses = coursesForStaff(s);
           const total = myCourses.length;
           let done=0;
@@ -1888,7 +1911,7 @@ function renderReports(){
     <table>
       <thead><tr><th>姓名</th><th>部門/職稱</th><th>完成率</th><th>觀看時數</th><th>測驗平均分數</th></tr></thead>
       <tbody>
-        ${STATE.staff.map(s=>{
+        ${sortedStaff().map(s=>{
           const myCourses = coursesForStaff(s);
           const total = myCourses.length;
           let done=0, watchSec=0;

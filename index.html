@@ -838,9 +838,24 @@ async function recordLastLogin(staffId){
     await saveStaffProgress(staffId, mine);
   }catch(e){ console.error('記錄登入時間失敗', e); }
 }
+// Drafts: a course with published:false is hidden from everyone except admins and people marked as managers
+// (who can preview it). Courses saved before this feature have no flag and count as published.
+function isPublished(c){ return !!c && c.published !== false; }
+// Which tab a course belongs to. New items remember it (kind), so a half-finished course without a video still stays in its tab.
+function courseTab(c){
+  if(c && c.kind==='course') return 'course';
+  if(c && c.kind==='doc') return 'doc';
+  return courseVideos(c).length>0? 'course' : 'doc';
+}
+function visibleCoursesFor(u, admin){
+  if(admin) return STATE.courses;
+  const mine = coursesForStaff(u);
+  return (u && u.isManager)? mine.concat(STATE.courses.filter(c=>!isPublished(c))) : mine;
+}
 function coursesForStaff(staffObj){
-  if(!staffObj) return STATE.courses;
+  if(!staffObj) return STATE.courses.filter(isPublished);
   return STATE.courses.filter(c=>{
+    if(!isPublished(c)) return false;
     const hasDeptTargets = c.targetDepts && c.targetDepts.length>0;
     const hasStaffTargets = c.targetStaffIds && c.targetStaffIds.length>0;
     if(!hasDeptTargets && !hasStaffTargets) return true;
@@ -967,7 +982,8 @@ function isLockExempt(staffObj, course){
 }
 function isCourseLocked(staffId, course){
   if(STATE.lockingEnabled===false) return false;
-  const ids = coursePrerequisiteIds(course);
+  if(!isPublished(course)) return false;
+  const ids = coursePrerequisiteIds(course).filter(id=>{ const pc = STATE.courses.find(x=>x.id===id); return pc && isPublished(pc); });
   if(!ids.length) return false;
   const staffObj = STATE.staff.find(s=>s.id===staffId);
   if(isLockExempt(staffObj, course)) return false;
@@ -1009,6 +1025,82 @@ function listHeaderHtml(title, list, u, admin){
   return `<div class="section-title" style="margin-top:0;margin-bottom:4px;">${title}</div><div class="muted" style="margin-bottom:12px;">${summary}</div>`;
 }
 
+function quizProblems(quiz){
+  const out = [];
+  (quiz||[]).forEach((q,n)=>{
+    if(!q.q || !String(q.q).trim()) out.push('第 '+(n+1)+' 題還沒有填題目');
+    if(!q.options || q.options.length<2 || q.options.some(o=>!String(o).trim())) out.push('第 '+(n+1)+' 題的選項不完整');
+    if(!correctSet(q).filter(v=>Number.isInteger(v)).length) out.push('第 '+(n+1)+' 題還沒有設定正確答案');
+  });
+  return out;
+}
+// What still has to be fixed before an item may be shown to staff.
+function publishProblems(c){
+  const out = [];
+  if(!c.title || !String(c.title).trim()) out.push('還沒有填名稱');
+  if(courseTab(c)==='course' && !c.referenceOnly){
+    const vids = courseVideos(c);
+    if(!vids.length) out.push('還沒有放任何 YouTube 影片(純文件請改放到「文件資料」,或勾選「僅供參考資料」)');
+    vids.forEach((v,i)=>{ if(!ytId(v.url)) out.push('第 '+(i+1)+' 支影片的連結格式不正確'); });
+  }
+  quizProblems(c.quiz).forEach(m=>out.push('測驗:'+m));
+  return out;
+}
+function audienceText(c){
+  const depts = c.targetDepts||[], ids = c.targetStaffIds||[];
+  if(!depts.length && !ids.length) return '所有人員(尚未指定適用部門或人員)';
+  const parts = [];
+  if(depts.length) parts.push(depts.join('、'));
+  if(ids.length) parts.push(ids.length+' 位指定人員');
+  return parts.join(' + ');
+}
+function draftBadgeHtml(c){
+  return isPublished(c)? '' : '· <span style="color:var(--warn);">📝 草稿(尚未發布)</span>';
+}
+function draftBannerHtml(c, admin){
+  if(isPublished(c)) return '';
+  return `<div style="background:var(--accent-soft);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:13px;line-height:1.6;">📝 <b>草稿</b>:這${courseTab(c)==='course'?'堂課':'份資料'}尚未發布,一般同仁目前看不到。${admin? '確認沒問題後,請按下方「✅ 發布給同仁」。' : '你現在是預覽模式,觀看與測驗都不會被記錄;管理員確認後才會發布。'}</div>`;
+}
+function draftsOverviewHtml(){
+  const drafts = STATE.courses.filter(c=>!isPublished(c));
+  if(!drafts.length) return '';
+  return `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="section-title" style="margin-top:0;">📝 草稿(尚未發布,同仁看不到)</div>
+      <div class="muted" style="margin-bottom:10px;">確認好之後,點進去按「✅ 發布給同仁」才會開放。</div>
+      ${drafts.map(c=>`<div class="course-item" style="margin-bottom:8px;" onclick="openCourse('${c.id}')"><div><h4>${escapeHtml(c.title||'(未命名)')}</h4><p>${courseTab(c)==='course'?'課程':'文件資料'}${publishProblems(c).length? ' · <span style="color:var(--warn);">還有 '+publishProblems(c).length+' 項未完成</span>':' · 內容已齊全,可以發布'}</p></div><span class="pill warn">草稿</span></div>`).join('')}
+    </div>`;
+}
+function openCourse(id){
+  const c = STATE.courses.find(x=>x.id===id);
+  if(!c) return;
+  STATE.selectedCourseId = id;
+  goView(courseTab(c)==='course'? 'courses' : 'documents');
+}
+async function togglePublish(btn, id){
+  const c0 = STATE.courses.find(x=>x.id===id);
+  if(!c0) return;
+  const willPublish = !isPublished(c0);
+  if(willPublish){
+    const problems = publishProblems(c0);
+    if(problems.length){ alert('還不能發布,請先處理:\n・'+problems.join('\n・')+'\n\n(按「編輯」補齊後再發布)'); return; }
+    if(!confirm('發布後,「'+audienceText(c0)+'」就能看到這'+(courseTab(c0)==='course'?'堂課':'份資料')+'。\n\n確定要發布嗎?')) return;
+  } else {
+    if(!confirm('改回草稿後,同仁會暫時看不到這'+(courseTab(c0)==='course'?'堂課':'份資料')+'(他們已有的觀看與測驗紀錄會保留)。\n\n確定嗎?')) return;
+  }
+  const restore = lockBtn(btn, '處理中...');
+  let c;
+  try{ c = await loadCourse(id); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
+  if(!c || c.deleted){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
+  c.published = willPublish;
+  try{ await saveCourse(c); }
+  catch(e){ alert('無法連線到資料庫,尚未儲存,請確認網路連線後再試一次。'); restore(); return; }
+  const pi = STATE.courses.findIndex(x=>x.id===id);
+  if(pi>=0) STATE.courses[pi] = c;
+  alert(willPublish? '✅ 已發布,指定的同仁現在可以看到了。' : '已改回草稿,同仁暫時看不到。');
+  render();
+}
+
 function prereqBadgeHtml(c, admin){
   if(!admin) return '';
   const ids = coursePrerequisiteIds(c);
@@ -1022,9 +1114,9 @@ function gatedCoursesOverviewHtml(){
   const rows = gated.map(c=>{
     const names = coursePrerequisiteIds(c).map(id=>{ const x=STATE.courses.find(y=>y.id===id); return x? escapeHtml(x.title) : '<span class="muted">(已刪除的課程)</span>'; }).join('、');
     const exemptCount = (c.lockExemptDepts||[]).length + (c.lockExemptStaffIds||[]).length;
-    const type = courseVideos(c).length? '課程' : '文件';
+    const type = courseTab(c)==='course'? '課程' : '文件';
     return `<tr>
-      <td>${c.pinned?'⭐ ':''}${escapeHtml(c.title)} <span class="pill off">${type}</span></td>
+      <td>${c.pinned?'⭐ ':''}${escapeHtml(c.title)} <span class="pill off">${type}</span>${isPublished(c)? '' : ' <span class="pill warn">草稿</span>'}</td>
       <td>${names}</td>
       <td class="muted">${exemptCount? '有豁免('+exemptCount+')':'-'}</td>
     </tr>`;
@@ -1059,8 +1151,9 @@ async function toggleLocking(btn){
 
 function renderDashboard(){
   const totalStaff = STATE.staff.length;
-  const totalCourses = STATE.courses.filter(c=>courseVideos(c).length>0).length;
-  const totalDocs = STATE.courses.length - totalCourses;
+  const totalCourses = STATE.courses.filter(c=>isPublished(c) && courseTab(c)==='course').length;
+  const totalDocs = STATE.courses.filter(c=>isPublished(c) && courseTab(c)==='doc').length;
+  const draftCount = STATE.courses.filter(c=>!isPublished(c)).length;
   let totalAssignments=0, totalCompleted=0, pendingQuiz=0;
   const notStartedByCourse = {};
   const pendingQuizByCourse = {};
@@ -1089,7 +1182,7 @@ function renderDashboard(){
     <div>
       <div class="date">${todayLabel()}</div>
       <h1>早安,${escapeHtml(u? u.name:'')}</h1>
-      <div class="muted">這裡是教育訓練的整體概況。共 ${totalCourses} 堂課程、${totalDocs} 份文件資料,${pendingQuiz} 項測驗待完成。</div>
+      <div class="muted">這裡是教育訓練的整體概況。共 ${totalCourses} 堂課程、${totalDocs} 份文件資料${draftCount? '(另有 '+draftCount+' 份草稿尚未發布)':''},${pendingQuiz} 項測驗待完成。</div>
     </div>
     <button class="btn accent" onclick="goView('courses')">+ 前往課程</button>
   </div>
@@ -1112,6 +1205,7 @@ function renderDashboard(){
     <div class="card stat-card"><div class="top"><div class="label">待完成測驗</div><div class="icon">!</div></div><div class="value">${pendingQuiz}</div></div>
   </div>
 
+  ${draftsOverviewHtml()}
   ${gatedCoursesOverviewHtml()}
 
   <div class="section-title">我的課程進度</div>
@@ -1146,15 +1240,15 @@ function goView(v){
 /* ---------- Courses ---------- */
 function renderCourses(){
   const admin = isAdmin();
-  const allVisible = admin? STATE.courses : coursesForStaff(currentUser());
-  const visibleCourses = groupSortCourses(allVisible.filter(c=>courseVideos(c).length>0));
+  const allVisible = visibleCoursesFor(currentUser(), admin);
+  const visibleCourses = groupSortCourses(allVisible.filter(c=>courseTab(c)==='course'));
   const selected = visibleCourses.find(c=>c.id===STATE.selectedCourseId) || visibleCourses[0];
   const u = currentUser();
   const prog = selected? userProgress(u.id)[selected.id] : null;
   const vids = selected? courseVideos(selected) : [];
   const activeIdx = Math.min(STATE.selectedVideoIndex||0, Math.max(vids.length-1,0));
   const userExempt = selected? isQuizExempt(u, selected) : false;
-  const locked = (selected && !admin)? isCourseLocked(u.id, selected) : false;
+  const locked = (selected && !admin && isPublished(selected))? isCourseLocked(u.id, selected) : false;
   const prereqCourses = selected? coursePrerequisiteIds(selected).map(id=>STATE.courses.find(x=>x.id===id)).filter(Boolean) : [];
 
   return `
@@ -1172,6 +1266,7 @@ function renderCourses(){
         </div>
       ` : `
         <div class="card">
+          ${draftBannerHtml(selected, admin)}
           <div class="video-wrap"><div id="ytplayer"></div></div>
           ${vids.length>1? `
             <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;">
@@ -1204,6 +1299,7 @@ function renderCourses(){
           ${(selected.quiz && selected.quiz.length && !userExempt && !selected.referenceOnly)? `<button class="btn ghost small" style="margin-top:10px;" onclick="goToQuiz('${selected.id}')">前往測驗 →</button>`:''}
           ${admin? `
           <div style="margin-top:10px;">
+            <button class="btn ${isPublished(selected)?'ghost':'accent'} small" onclick="togglePublish(this,'${selected.id}')">${isPublished(selected)?'⏸ 改回草稿':'✅ 發布給同仁'}</button>
             <button class="btn ghost small" onclick="togglePin(this,'${selected.id}')">${selected.pinned?'取消重要標記':'⭐ 設為重要'}</button>
             <button class="btn ghost small" onclick="showEditCourseForm('${selected.id}',true)">編輯課程</button>
             <button class="icon-btn" style="margin-left:10px;" onclick="deleteCourse(this,'${selected.id}')">刪除此課程</button>
@@ -1218,29 +1314,29 @@ function renderCourses(){
           const p = userProgress(u.id)[c.id];
           const complete = isCourseComplete(u.id, c.id);
           const vc = courseVideos(c).length;
-          const cLocked = !admin && isCourseLocked(u.id, c);
+          const cLocked = !admin && isPublished(c) && isCourseLocked(u.id, c);
           return categoryHeaderHtml(visibleCourses, idx) + `<div class="course-item ${c.id===STATE.selectedCourseId?'selected':''}" onclick="selectCourse('${c.id}')">
-            <div><h4><span style="color:var(--accent);margin-right:6px;">${idx+1}.</span>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (p&&p.watched?'已觀看':'未觀看')} ${vc>1? '· '+vc+' 支影片':''} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''} ${prereqBadgeHtml(c, admin)}</p></div>
+            <div><h4><span style="color:var(--accent);margin-right:6px;">${idx+1}.</span>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (p&&p.watched?'已觀看':'未觀看')} ${vc>1? '· '+vc+' 支影片':''} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''} ${draftBadgeHtml(c)} ${prereqBadgeHtml(c, admin)}</p></div>
             <span class="pill ${cLocked?'off':(complete?'ok':(p?'warn':'off'))}">${cLocked?'鎖定':(complete?'完成':(p?'待測驗':'未開始'))}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無課程</div>'}
       </div>
     </div>
   </div>
-  ${((admin || (u && u.canViewRoster)) && selected)? courseRosterTableHtml(selected, '觀看') : ''}
+  ${((admin || (u && u.canViewRoster)) && selected && isPublished(selected))? courseRosterTableHtml(selected, '觀看') : ''}
   `;
 }
 
 /* ---------- Documents ---------- */
 function renderDocuments(){
   const admin = isAdmin();
-  const allVisible = admin? STATE.courses : coursesForStaff(currentUser());
-  const visibleDocs = groupSortCourses(allVisible.filter(c=>courseVideos(c).length===0));
+  const allVisible = visibleCoursesFor(currentUser(), admin);
+  const visibleDocs = groupSortCourses(allVisible.filter(c=>courseTab(c)==='doc'));
   const selected = visibleDocs.find(c=>c.id===STATE.selectedCourseId) || visibleDocs[0];
   const u = currentUser();
   const prog = selected? userProgress(u.id)[selected.id] : null;
   const userExempt = selected? isQuizExempt(u, selected) : false;
-  const locked = (selected && !admin)? isCourseLocked(u.id, selected) : false;
+  const locked = (selected && !admin && isPublished(selected))? isCourseLocked(u.id, selected) : false;
   const prereqCourses = selected? coursePrerequisiteIds(selected).map(id=>STATE.courses.find(x=>x.id===id)).filter(Boolean) : [];
 
   return `
@@ -1258,6 +1354,7 @@ function renderDocuments(){
         </div>
       ` : `
         <div class="card">
+          ${draftBannerHtml(selected, admin)}
           <div style="display:flex;justify-content:space-between;align-items:flex-start;">
             <div>
               <h3 style="margin:0 0 6px;">${selected.pinned?'⭐ ':''}${escapeHtml(selected.title)}</h3>
@@ -1282,6 +1379,7 @@ function renderDocuments(){
             : `<button class="btn ghost small" style="margin-top:14px;" onclick="markReadComplete(this,'${selected.id}')" ${prog&&prog.watched?'disabled':''}>${prog&&prog.watched?'已完成閱讀':'我已閱讀完成'}</button>`)}
           ${admin? `
           <div style="margin-top:10px;">
+            <button class="btn ${isPublished(selected)?'ghost':'accent'} small" onclick="togglePublish(this,'${selected.id}')">${isPublished(selected)?'⏸ 改回草稿':'✅ 發布給同仁'}</button>
             <button class="btn ghost small" onclick="togglePin(this,'${selected.id}')">${selected.pinned?'取消重要標記':'⭐ 設為重要'}</button>
             <button class="btn ghost small" onclick="showEditCourseForm('${selected.id}',false)">編輯資料</button>
             <button class="icon-btn" style="margin-left:10px;" onclick="deleteCourse(this,'${selected.id}')">刪除此文件資料</button>
@@ -1295,16 +1393,16 @@ function renderDocuments(){
         ${visibleDocs.map((c, idx)=>{
           const p = userProgress(u.id)[c.id];
           const complete = isCourseComplete(u.id, c.id);
-          const cLocked = !admin && isCourseLocked(u.id, c);
+          const cLocked = !admin && isPublished(c) && isCourseLocked(u.id, c);
           return categoryHeaderHtml(visibleDocs, idx) + `<div class="course-item ${c.id===STATE.selectedCourseId?'selected':''}" onclick="selectCourse('${c.id}')">
-            <div><h4><span style="color:var(--accent);margin-right:6px;">${idx+1}.</span>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (c.materials&&c.materials.length? c.materials.length+' 份文件':'')} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''} ${prereqBadgeHtml(c, admin)}</p></div>
+            <div><h4><span style="color:var(--accent);margin-right:6px;">${idx+1}.</span>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (c.materials&&c.materials.length? c.materials.length+' 份文件':'')} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''} ${draftBadgeHtml(c)} ${prereqBadgeHtml(c, admin)}</p></div>
             <span class="pill ${cLocked?'off':(complete?'ok':(p?'warn':'off'))}">${cLocked?'鎖定':(complete?'完成':(p?'待測驗':'未開始'))}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無文件資料</div>'}
       </div>
     </div>
   </div>
-  ${((admin || (u && u.canViewRoster)) && selected)? courseRosterTableHtml(selected, '閱讀') : ''}
+  ${((admin || (u && u.canViewRoster)) && selected && isPublished(selected))? courseRosterTableHtml(selected, '閱讀') : ''}
   `;
 }
 
@@ -1326,6 +1424,14 @@ function courseFormInnerHtml(c, requireVideo){
     <div class="form-row" style="margin:8px 0;">
       <input type="text" id="courseFormCategory" list="courseCategoryList" style="width:100%;" placeholder="分類(例如:手術、美療、護理;留空則依課程名稱「分類-名稱」自動判斷)" value="${escapeHtml(c.category||'')}">
       <datalist id="courseCategoryList">${[...new Set(PREFERRED_CATEGORY_ORDER.concat(STATE.courses.map(courseCategory).filter(k=>k!=='其他')))].map(k=>`<option value="${escapeHtml(k)}">`).join('')}</datalist>
+    </div>
+    <div style="background:var(--accent-soft);border-radius:10px;padding:12px 14px;margin:10px 0;">
+      <div style="font-weight:700;margin-bottom:6px;">發布狀態</div>
+      <select id="courseFormStatus" style="width:100%;">
+        <option value="draft" ${(c.id && isPublished(c))? '' : 'selected'}>📝 草稿 — 隱藏,一般同仁看不到(管理員與主管可預覽)</option>
+        <option value="published" ${(c.id && isPublished(c))? 'selected' : ''}>✅ 已發布 — 指定的對象就看得到</option>
+      </select>
+      <div class="muted" style="margin-top:6px;line-height:1.6;">做到一半、或要等主管確認時,請選「草稿」,內容可以還沒填完整。確認沒問題後,在課程頁面按「✅ 發布給同仁」即可。</div>
     </div>
     <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:6px;cursor:pointer;background:var(--accent-soft);padding:8px 12px;border-radius:8px;">
       <input type="checkbox" id="courseFormReferenceOnly" ${c.referenceOnly?'checked':''}>
@@ -1595,6 +1701,7 @@ function addMaterialRow(prefill){
 function readCourseForm(){
   const title = document.getElementById('courseFormTitle').value.trim();
   const desc = document.getElementById('courseFormDesc').value.trim();
+  const status = document.getElementById('courseFormStatus').value;
   const referenceOnly = document.getElementById('courseFormReferenceOnly').checked;
   const category = document.getElementById('courseFormCategory').value.trim();
   const prerequisiteIds = Array.from(document.querySelectorAll('.prerequisiteCheck:checked')).map(el=>el.value);
@@ -1612,24 +1719,19 @@ function readCourseForm(){
     const name = row.querySelector('.videoName').value.trim();
     const url = row.querySelector('.videoUrl2').value.trim();
     if(url){
-      if(ytId(url)) videos.push({name: name || ('影片'+(videos.length+1)), url});
-      else hasInvalidVideo = true;
+      videos.push({name: name || ('影片'+(videos.length+1)), url});
+      if(!ytId(url)) hasInvalidVideo = true;
     }
   });
   const qRows = document.querySelectorAll('#qBuilder .quiz-q');
   const quiz = [];
-  let quizError = null;
-  qRows.forEach((row, n)=>{
+  qRows.forEach(row=>{
     const qtext = row.querySelector('.qtext').value.trim();
     const opts = Array.from(row.querySelectorAll('.qopt')).map(o=>o.value.trim());
     const multi = row.querySelector('.qtype').value==='multi';
     const correct = Array.from(row.querySelectorAll('.qcorrect')).map((c,i)=>c.checked? i : -1).filter(i=>i>=0);
     if(!qtext && opts.every(o=>!o)) return; // a completely empty question row is simply ignored
-    if(quizError) return;
-    if(!qtext){ quizError = '第 '+(n+1)+' 題還沒有填題目'; return; }
-    if(opts.some(o=>!o)){ quizError = '第 '+(n+1)+' 題有選項沒填(不需要的選項請按「移除選項」)'; return; }
-    if(!correct.length){ quizError = '第 '+(n+1)+' 題還沒有勾選正確答案'; return; }
-    if(!multi && correct.length!==1){ quizError = '第 '+(n+1)+' 題是單選題,只能有 1 個正確答案'; return; }
+    // kept as typed even if unfinished; "can this be shown to staff" is checked when publishing (publishProblems)
     quiz.push(multi? {q:qtext, options:opts, multi:true, answers:correct, answer:correct[0]} : {q:qtext, options:opts, answer:correct[0]});
   });
   const matRows = document.querySelectorAll('#materialBuilder .form-row');
@@ -1639,7 +1741,7 @@ function readCourseForm(){
     const url = row.querySelector('.materialUrl').value.trim();
     if(url) materials.push({name: name || '講義', url});
   });
-  return {quizError, title, desc, category, referenceOnly, prerequisiteIds, notifyEmails, videos, hasInvalidVideo, quiz, materials, targetDepts, targetStaffIds, quizExemptDepts, quizExemptStaffIds, lockExemptDepts, lockExemptStaffIds};
+  return {status, title, desc, category, referenceOnly, prerequisiteIds, notifyEmails, videos, hasInvalidVideo, quiz, materials, targetDepts, targetStaffIds, quizExemptDepts, quizExemptStaffIds, lockExemptDepts, lockExemptStaffIds};
 }
 
 function lockBtn(btn, loadingLabel){
@@ -1650,15 +1752,32 @@ function lockBtn(btn, loadingLabel){
   return ()=>{ btn.disabled=false; btn.textContent=original; };
 }
 
+// Draft = save whatever has been typed. Published = everything must be complete, and the person confirms who will see it.
+function checkBeforeSave(f, wasPublished){
+  if(f.status!=='published'){
+    if(wasPublished && !confirm('改成草稿後,同仁會暫時看不到這'+(__courseFormRequireVideo?'堂課':'份資料')+'(他們已有的觀看與測驗紀錄會保留)。\n\n確定要改成草稿嗎?')) return false;
+    return true;
+  }
+  const problems = publishProblems({title:f.title, kind: __courseFormRequireVideo? 'course':'doc', referenceOnly:f.referenceOnly, videos:f.videos, quiz:f.quiz});
+  if(problems.length){
+    alert('這'+(__courseFormRequireVideo?'堂課':'份資料')+'還不能發布,尚未儲存。請先處理:\n・'+problems.join('\n・')+'\n\n(如果還沒做完,可以把「發布狀態」改成「草稿」再儲存)');
+    return false;
+  }
+  if(!wasPublished){
+    return confirm('儲存後,「'+audienceText(f)+'」就會看到這'+(__courseFormRequireVideo?'堂課':'份資料')+'。\n\n確定要發布嗎?\n(還沒確認好,請按「取消」,把「發布狀態」改成草稿)');
+  }
+  if(!f.targetDepts.length && !f.targetStaffIds.length){
+    return confirm('這堂課沒有指定任何「適用部門」或「適用人員」,所有人員都會看到。\n\n確定要這樣儲存嗎?\n(要指定對象,請按「取消」,到表單的「① 誰需要上這堂課」勾選)');
+  }
+  return true;
+}
+
 async function submitNewCourse(btn){
   const f = readCourseForm();
   if(!f.title){ alert(__courseFormRequireVideo? '請填寫課程名稱' : '請填寫文件資料名稱'); return; }
-  if(f.hasInvalidVideo){ alert('有一支影片的連結格式不正確,請確認是有效的YouTube連結'); return; }
-  if(f.quizError){ alert('測驗題目有問題,尚未儲存:\n'+f.quizError); return; }
-  if(__courseFormRequireVideo && !f.referenceOnly && f.videos.length===0){ alert('請至少新增一支有效的YouTube影片,或勾選「僅供參考資料」'); return; }
-  if(!f.targetDepts.length && !f.targetStaffIds.length){ if(!confirm('這堂課沒有指定任何「適用部門」或「適用人員」,所有人員都會看到。\n\n確定要這樣儲存嗎?\n(要指定對象,請按「取消」,到表單的「① 誰需要上這堂課」勾選)')) return; }
+  if(!checkBeforeSave(f, false)) return;
   const restore = lockBtn(btn, '儲存中...');
-  const course = {id:uid(), title:f.title, desc:f.desc, category:f.category, referenceOnly:f.referenceOnly, prerequisiteIds:f.prerequisiteIds, notifyEmails:f.notifyEmails, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts, targetStaffIds:f.targetStaffIds, quizExemptDepts:f.quizExemptDepts, quizExemptStaffIds:f.quizExemptStaffIds, lockExemptDepts:f.lockExemptDepts, lockExemptStaffIds:f.lockExemptStaffIds};
+  const course = {id:uid(), published: f.status==='published', kind: __courseFormRequireVideo? 'course':'doc', title:f.title, desc:f.desc, category:f.category, referenceOnly:f.referenceOnly, prerequisiteIds:f.prerequisiteIds, notifyEmails:f.notifyEmails, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts, targetStaffIds:f.targetStaffIds, quizExemptDepts:f.quizExemptDepts, quizExemptStaffIds:f.quizExemptStaffIds, lockExemptDepts:f.lockExemptDepts, lockExemptStaffIds:f.lockExemptStaffIds};
   try{ await saveCourse(course); }
   catch(e){ alert('無法連線到資料庫,這堂課尚未儲存,請確認網路連線後再試一次。'); restore(); return; }
   try{
@@ -1674,14 +1793,12 @@ async function submitNewCourse(btn){
 async function submitEditCourse(btn, id){
   const f = readCourseForm();
   if(!f.title){ alert(__courseFormRequireVideo? '請填寫課程名稱' : '請填寫文件資料名稱'); return; }
-  if(f.hasInvalidVideo){ alert('有一支影片的連結格式不正確,請確認是有效的YouTube連結'); return; }
-  if(f.quizError){ alert('測驗題目有問題,尚未儲存:\n'+f.quizError); return; }
-  if(__courseFormRequireVideo && !f.referenceOnly && f.videos.length===0){ alert('請至少新增一支有效的YouTube影片,或勾選「僅供參考資料」'); return; }
-  if(!f.targetDepts.length && !f.targetStaffIds.length){ if(!confirm('這堂課沒有指定任何「適用部門」或「適用人員」,所有人員都會看到。\n\n確定要這樣儲存嗎?\n(要指定對象,請按「取消」,到表單的「① 誰需要上這堂課」勾選)')) return; }
+  if(!checkBeforeSave(f, (()=>{ const ex = STATE.courses.find(x=>x.id===id); return !!ex && isPublished(ex); })())) return;
   const restore = lockBtn(btn, '儲存中...');
   let c;
   try{ c = await loadCourse(id); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   if(!c || c.deleted){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
+  c.published = (f.status==='published'); if(!c.kind) c.kind = __courseFormRequireVideo? 'course':'doc';
   c.title = f.title; c.desc = f.desc; c.category = f.category; c.referenceOnly = f.referenceOnly; c.prerequisiteIds = f.prerequisiteIds; c.notifyEmails = f.notifyEmails;
   if(__courseFormRequireVideo){ c.videos = f.videos; c.videoUrl = f.videos[0]? f.videos[0].url:''; }
   c.quiz = f.quiz; c.materials = f.materials; c.targetDepts = f.targetDepts; c.targetStaffIds = f.targetStaffIds;
@@ -1739,6 +1856,8 @@ function onYouTubeIframeAPIReady(){
 if(window.YT && window.YT.Player) onYouTubeIframeAPIReady();
 let watchTimer = null;
 async function markReadComplete(btn, courseId){
+  const draftCourse = STATE.courses.find(c=>c.id===courseId);
+  if(draftCourse && !isPublished(draftCourse)){ alert('這是草稿預覽,不會記錄閱讀完成。'); return; }
   const u = currentUser();
   const restore = lockBtn(btn, '儲存中...');
   let mine;
@@ -1815,6 +1934,8 @@ function accrueWatch(forceWatched){
   const u = currentUser();
   const cid = __watchCourseId || STATE.selectedCourseId;
   if(!u || !cid) return false;
+  const watchedCourse = STATE.courses.find(c=>c.id===cid);
+  if(watchedCourse && !isPublished(watchedCourse)){ __playingSince = null; return false; } // draft preview is never recorded
   let sec = 0;
   if(__playingSince!==null){
     const now = Date.now();
@@ -1921,7 +2042,7 @@ function goToQuiz(courseId){
 function goToCourseEdit(courseId){
   STATE.selectedCourseId = courseId;
   const course = STATE.courses.find(c=>c.id===courseId);
-  const targetView = (course && courseVideos(course).length>0)? 'courses' : 'documents';
+  const targetView = (course && courseTab(course)==='course')? 'courses' : 'documents';
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active', n.dataset.view===targetView));
   STATE.view = targetView;
   render();
@@ -1932,7 +2053,7 @@ function goToCourseEdit(courseId){
 function renderQuiz(){
   const u = currentUser();
   const admin = isAdmin();
-  const scopedCourses = admin? STATE.courses : coursesForStaff(u);
+  const scopedCourses = visibleCoursesFor(u, admin);
   const withQuiz = scopedCourses.filter(c=>c.quiz && c.quiz.length && (admin || (!isQuizExempt(u, c) && !isCourseLocked(u.id, c))));
   const selected = withQuiz.find(c=>c.id===STATE.selectedCourseId) || withQuiz[0];
 
@@ -1948,7 +2069,7 @@ function renderQuiz(){
         ${withQuiz.map(c=>{
           const p = userProgress(u.id)[c.id];
           return `<div class="course-item ${selected&&c.id===selected.id?'selected':''}" onclick="selectQuizCourse('${c.id}')">
-            <div><h4>${escapeHtml(c.title)}</h4><p>${c.quiz.length} 題</p></div>
+            <div><h4>${isPublished(c)? '' : '📝 '}${escapeHtml(c.title)}</h4><p>${c.quiz.length} 題${isPublished(c)? '' : ' · 草稿(試做不記錄)'}</p></div>
             <span class="pill ${p&&p.quizPassed?'ok':'off'}">${p&&p.quizPassed?'已通過 '+p.quizScore+'%':'未測驗'}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無測驗</div>'}
@@ -1970,7 +2091,7 @@ function renderQuizBody(course, u){
     const r = STATE.quizResult;
     return `
     <div class="card">
-      <div class="result-banner ${r.passed?'pass':'fail'}">${r.passed? '✓ 測驗通過':'✗ 未達通過標準'} — 得分 ${r.score}%(答對 ${r.correct}/${r.total} 題)</div>
+      <div class="result-banner ${r.passed?'pass':'fail'}">${r.passed? '✓ 測驗通過':'✗ 未達通過標準'} — 得分 ${r.score}%(答對 ${r.correct}/${r.total} 題)${r.preview? ' ・草稿試做,成績不會被記錄':''}</div>
       ${r.details.map((d,i)=>questionReviewHtml(d,i)).join('')}
       <button class="btn ghost small" onclick="STATE.quizResult=null;STATE.quizAnswers={};render();">重新測驗</button>
     </div>`;
@@ -2011,6 +2132,12 @@ async function submitQuiz(btn, courseId){
   const total = course.quiz.length;
   const score = Math.round(correct/total*100);
   const passed = score >= 70;
+  if(!isPublished(course)){
+    // draft: let the manager try it out and see the result, but record nothing
+    STATE.quizResult = {courseId, correct, total, score, passed, details, preview:true};
+    render();
+    return;
+  }
   const restore = lockBtn(btn, '送出中...');
   let mine;
   try{ mine = await fetchOwnProgress(u.id); }catch(e){ alert('無法連線到資料庫,測驗結果尚未儲存,請確認網路連線後重新送出。'); restore(); return; }
@@ -2235,7 +2362,7 @@ function renderReports(){
   </div>
   <div class="card">
     <div class="section-title" style="margin-top:0;">各課程觀看時數(全體累計)</div>
-    ${STATE.courses.map(c=>{
+    ${STATE.courses.filter(isPublished).map(c=>{
       let totalSec=0;
       STATE.staff.forEach(s=>{ const p=userProgress(s.id)[c.id]; if(p) totalSec += (p.watchSeconds||0); });
       const mins = Math.round(totalSec/60);

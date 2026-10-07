@@ -283,8 +283,17 @@ async function loadStaffProgress(staffId){
 async function saveStaffProgress(staffId, obj){ await apiSet(PROGRESS_PREFIX+staffId, obj); }
 
 // Quiz attempts are stored compactly (answers + right/wrong), not with full question text.
+// A question may be single-answer (q.answer = index) or multi-answer (q.multi = true, q.answers = [indexes]).
+function correctSet(q){ return q.multi? (q.answers||[]) : [q.answer]; }
+function toArr(v){ return Array.isArray(v)? v : ((v===undefined || v===null)? [] : [v]); }
+// Multi-answer questions are right only when exactly the right options are chosen.
+function gradeQuestion(q, selected){
+  const sel = toArr(selected).slice().sort((a,b)=>a-b);
+  const cor = correctSet(q).slice().sort((a,b)=>a-b);
+  return sel.length===cor.length && sel.every((v,i)=>v===cor[i]);
+}
 function quizSig(quiz){
-  const s = JSON.stringify((quiz||[]).map(q=>[q.q, q.options, q.answer]));
+  const s = JSON.stringify((quiz||[]).map(q=> q.multi? [q.q, q.options, ['m'].concat(q.answers||[])] : [q.q, q.options, q.answer]));
   let h = 5381;
   for(let i=0;i<s.length;i++){ h = ((h<<5)+h+s.charCodeAt(i))|0; }
   return (h>>>0).toString(36);
@@ -323,7 +332,7 @@ function attemptDetails(course, h){
   const quiz = (course && course.quiz) || [];
   const sameQuiz = !!(h.qsig && course && quizSig(quiz)===h.qsig);
   return (h.answers||[]).map((sel,i)=>{
-    if(sameQuiz && quiz[i]) return {q:quiz[i].q, options:quiz[i].options, selected:sel, correct:quiz[i].answer, isCorrect: sel===quiz[i].answer};
+    if(sameQuiz && quiz[i]) return {q:quiz[i].q, options:quiz[i].options, selected:sel, correct: quiz[i].multi? quiz[i].answers : quiz[i].answer, isCorrect: gradeQuestion(quiz[i], sel), multi: !!quiz[i].multi};
     return {q:'第 '+(i+1)+' 題(題目後來有修改,僅保留對錯)', options:[], selected:sel, correct:null, isCorrect: !!(h.ok && h.ok[i])};
   });
 }
@@ -533,6 +542,7 @@ function bindNav(){
 
 /* ---------- Login gate ---------- */
 function showLoginGate(){
+  stopWatch(false);
   document.getElementById('loginGate').style.display = 'flex';
   document.querySelector('.app').style.display = 'none';
   renderLoginGateContent();
@@ -781,6 +791,24 @@ function renderQuizHistoryModal(staffId, courseId){
   showModal(`${escapeHtml(s.name)} — ${escapeHtml(course.title)}<div class="muted" style="font-weight:400;margin-top:4px;">測驗歷史(近一年,共${history.length}次)</div>`, body);
 }
 
+function questionReviewHtml(d, i){
+  const sel = toArr(d.selected), cor = toArr(d.correct);
+  const unanswered = sel.length===0;
+  const multi = !!d.multi || Array.isArray(d.correct);
+  return `
+    <div class="quiz-q" style="border-color:${d.isCorrect?'var(--border)':'#c98f7c'};">
+      <div style="font-weight:600;margin-bottom:6px;">${i+1}. ${escapeHtml(d.q)}${multi? ' <span class="pill off" style="margin-left:6px;">複選</span>':''} ${d.isCorrect? '<span class="pill ok" style="margin-left:6px;">答對</span>' : '<span class="pill" style="background:#f3e4de;color:#b06a54;margin-left:6px;">答錯</span>'}</div>
+      ${(d.options||[]).map((opt,oi)=>{
+        const isCor = cor.includes(oi), isSel = sel.includes(oi);
+        let mark = '　', style = 'color:var(--sub);', note = '';
+        if(isCor){ mark = '✓'; style = 'color:var(--ok);font-weight:600;'; if(!isSel && multi && !unanswered) note = '(漏選)'; }
+        else if(isSel){ mark = '✗'; style = 'color:#b06a54;text-decoration:line-through;'; }
+        return `<div style="padding:3px 0;${style}">${mark} ${escapeHtml(opt)}${note? ' <span class="muted">'+note+'</span>':''}</div>`;
+      }).join('')}
+      ${unanswered? '<div class="muted" style="margin-top:4px;">(未作答)</div>' : ''}
+    </div>`;
+}
+
 function showQuizAttemptDetail(staffId, courseId, idx){
   const s = STATE.staff.find(x=>x.id===staffId);
   const course = STATE.courses.find(x=>x.id===courseId);
@@ -789,18 +817,7 @@ function showQuizAttemptDetail(staffId, courseId, idx){
   if(!s || !course || !h) return;
   const body = `
     <button class="btn ghost small" style="margin-bottom:14px;" onclick="renderQuizHistoryModal('${staffId}','${courseId}')">← 返回歷史列表</button>
-    ${attemptDetails(course, h).map((d,i)=>`
-      <div class="quiz-q" style="border-color:${d.isCorrect?'var(--border)':'#c98f7c'};">
-        <div style="font-weight:600;margin-bottom:6px;">${i+1}. ${escapeHtml(d.q)} ${d.isCorrect? '<span class="pill ok" style="margin-left:6px;">答對</span>' : '<span class="pill" style="background:#f3e4de;color:#b06a54;margin-left:6px;">答錯</span>'}</div>
-        ${d.options.map((opt,oi)=>{
-          let mark='　', style='color:var(--sub);';
-          if(oi===d.correct){ mark='✓'; style='color:var(--ok);font-weight:600;'; }
-          else if(oi===d.selected){ mark='✗'; style='color:#b06a54;text-decoration:line-through;'; }
-          return `<div style="padding:3px 0;${style}">${mark} ${escapeHtml(opt)}</div>`;
-        }).join('')}
-        ${(d.selected===undefined||d.selected===null)? '<div class="muted" style="margin-top:4px;">(未作答)</div>' : ''}
-      </div>
-    `).join('')}
+    ${attemptDetails(course, h).map((d,i)=>questionReviewHtml(d,i)).join('')}
   `;
   showModal(`${escapeHtml(s.name)} — ${escapeHtml(course.title)}<div class="muted" style="font-weight:400;margin-top:4px;">得分:${h.score}分 · ${fmtTime(h.submittedAt)}</div>`, body);
 }
@@ -1183,6 +1200,7 @@ function renderCourses(){
             </div>
           ` : ''}
           <div class="muted" id="watchTimeLabel" style="margin-top:10px;">累計觀看時間:${Math.floor((prog?.watchSeconds||0)/60)} 分 ${Math.floor((prog?.watchSeconds||0)%60)} 秒</div>
+          <div class="muted" id="watchSaveStatus" style="margin-top:2px;font-size:12px;"></div>
           ${(selected.quiz && selected.quiz.length && !userExempt && !selected.referenceOnly)? `<button class="btn ghost small" style="margin-top:10px;" onclick="goToQuiz('${selected.id}')">前往測驗 →</button>`:''}
           ${admin? `
           <div style="margin-top:10px;">
@@ -1496,25 +1514,70 @@ function showEditCourseForm(id, requireVideo){
   wrap.scrollIntoView({behavior:'smooth'});
 }
 
+let __qUid = 0;
+function optionRowHtml(gid, text, checked, multi, n){
+  return `<div class="opt-row">
+    <input type="${multi?'checkbox':'radio'}" class="qcorrect" name="${gid}" ${checked?'checked':''} title="勾選 = 這個選項是正確答案">
+    <input type="text" class="qopt" placeholder="選項 ${String.fromCharCode(65+n)}" value="${escapeHtml(text||'')}">
+    <button class="icon-btn" type="button" onclick="removeQuestionOption(this)">移除選項</button>
+  </div>`;
+}
+function relabelOptions(row){
+  Array.from(row.querySelectorAll('.qoptions .opt-row')).forEach((r,n)=>{
+    r.querySelector('.qopt').placeholder = '選項 '+String.fromCharCode(65+n);
+  });
+}
 function addQuestionRow(prefill){
   const b = document.getElementById('qBuilder');
   const idx = b.children.length;
   const row = document.createElement('div');
-  row.className='quiz-q';
-  const opts = prefill? prefill.options : ['','','',''];
+  row.className = 'quiz-q';
+  const gid = 'qc' + (++__qUid);
+  row.dataset.gid = gid;
+  const multi = !!(prefill && prefill.multi);
+  const opts = (prefill && prefill.options && prefill.options.length)? prefill.options : ['','','',''];
+  const correct = prefill? correctSet(prefill) : [];
   row.innerHTML = `
     <input type="text" class="qtext" placeholder="題目 ${idx+1}" value="${escapeHtml(prefill? prefill.q:'')}">
-    <div class="opt-row"><input type="text" class="qopt" placeholder="選項 A" value="${escapeHtml(opts[0]||'')}"></div>
-    <div class="opt-row"><input type="text" class="qopt" placeholder="選項 B" value="${escapeHtml(opts[1]||'')}"></div>
-    <div class="opt-row"><input type="text" class="qopt" placeholder="選項 C" value="${escapeHtml(opts[2]||'')}"></div>
-    <div class="opt-row"><input type="text" class="qopt" placeholder="選項 D" value="${escapeHtml(opts[3]||'')}"></div>
     <div class="opt-row">
-      <span class="muted">正確答案(0=A,1=B,2=C,3=D):</span>
-      <input type="number" class="qanswer" min="0" max="3" value="${prefill? prefill.answer:0}" style="width:60px;flex:none;">
-      <button class="icon-btn" onclick="this.closest('.quiz-q').remove()">移除題目</button>
+      <span class="muted">題型:</span>
+      <select class="qtype field" style="flex:none;min-width:0;width:auto;" onchange="onQuestionTypeChange(this)">
+        <option value="single" ${multi?'':'selected'}>單選題(只有 1 個正確答案)</option>
+        <option value="multi" ${multi?'selected':''}>複選題(可有多個正確答案,需全部選對才算對)</option>
+      </select>
+    </div>
+    <div class="muted" style="margin-top:6px;">請在「正確答案」的選項前面勾選(單選題只能勾 1 個)</div>
+    <div class="qoptions">${opts.map((o,n)=>optionRowHtml(gid, o, correct.includes(n), multi, n)).join('')}</div>
+    <div class="opt-row">
+      <button class="btn ghost small" type="button" onclick="addQuestionOption(this)">+ 新增選項</button>
+      <button class="icon-btn" type="button" onclick="this.closest('.quiz-q').remove()">移除題目</button>
     </div>
   `;
   b.appendChild(row);
+}
+function addQuestionOption(btn){
+  const row = btn.closest('.quiz-q');
+  const list = row.querySelector('.qoptions');
+  const n = list.children.length;
+  if(n>=6){ alert('每題最多 6 個選項'); return; }
+  const multi = row.querySelector('.qtype').value==='multi';
+  list.insertAdjacentHTML('beforeend', optionRowHtml(row.dataset.gid, '', false, multi, n));
+}
+function removeQuestionOption(btn){
+  const row = btn.closest('.quiz-q');
+  const list = row.querySelector('.qoptions');
+  if(list.children.length<=2){ alert('每題至少要有 2 個選項'); return; }
+  btn.closest('.opt-row').remove();
+  relabelOptions(row);
+}
+function onQuestionTypeChange(sel){
+  const row = sel.closest('.quiz-q');
+  const multi = sel.value==='multi';
+  const controls = Array.from(row.querySelectorAll('.qcorrect'));
+  const checkedIdx = controls.map((c,i)=>c.checked? i : -1).filter(i=>i>=0);
+  controls.forEach(c=>{ c.checked = false; c.type = multi? 'checkbox' : 'radio'; });
+  const keep = multi? checkedIdx : checkedIdx.slice(0,1);
+  keep.forEach(i=>{ controls[i].checked = true; });
 }
 
 function addMaterialRow(prefill){
@@ -1555,11 +1618,19 @@ function readCourseForm(){
   });
   const qRows = document.querySelectorAll('#qBuilder .quiz-q');
   const quiz = [];
-  qRows.forEach(row=>{
+  let quizError = null;
+  qRows.forEach((row, n)=>{
     const qtext = row.querySelector('.qtext').value.trim();
     const opts = Array.from(row.querySelectorAll('.qopt')).map(o=>o.value.trim());
-    const answer = parseInt(row.querySelector('.qanswer').value,10);
-    if(qtext && opts.every(o=>o)) quiz.push({q:qtext, options:opts, answer});
+    const multi = row.querySelector('.qtype').value==='multi';
+    const correct = Array.from(row.querySelectorAll('.qcorrect')).map((c,i)=>c.checked? i : -1).filter(i=>i>=0);
+    if(!qtext && opts.every(o=>!o)) return; // a completely empty question row is simply ignored
+    if(quizError) return;
+    if(!qtext){ quizError = '第 '+(n+1)+' 題還沒有填題目'; return; }
+    if(opts.some(o=>!o)){ quizError = '第 '+(n+1)+' 題有選項沒填(不需要的選項請按「移除選項」)'; return; }
+    if(!correct.length){ quizError = '第 '+(n+1)+' 題還沒有勾選正確答案'; return; }
+    if(!multi && correct.length!==1){ quizError = '第 '+(n+1)+' 題是單選題,只能有 1 個正確答案'; return; }
+    quiz.push(multi? {q:qtext, options:opts, multi:true, answers:correct, answer:correct[0]} : {q:qtext, options:opts, answer:correct[0]});
   });
   const matRows = document.querySelectorAll('#materialBuilder .form-row');
   const materials = [];
@@ -1568,7 +1639,7 @@ function readCourseForm(){
     const url = row.querySelector('.materialUrl').value.trim();
     if(url) materials.push({name: name || '講義', url});
   });
-  return {title, desc, category, referenceOnly, prerequisiteIds, notifyEmails, videos, hasInvalidVideo, quiz, materials, targetDepts, targetStaffIds, quizExemptDepts, quizExemptStaffIds, lockExemptDepts, lockExemptStaffIds};
+  return {quizError, title, desc, category, referenceOnly, prerequisiteIds, notifyEmails, videos, hasInvalidVideo, quiz, materials, targetDepts, targetStaffIds, quizExemptDepts, quizExemptStaffIds, lockExemptDepts, lockExemptStaffIds};
 }
 
 function lockBtn(btn, loadingLabel){
@@ -1583,6 +1654,7 @@ async function submitNewCourse(btn){
   const f = readCourseForm();
   if(!f.title){ alert(__courseFormRequireVideo? '請填寫課程名稱' : '請填寫文件資料名稱'); return; }
   if(f.hasInvalidVideo){ alert('有一支影片的連結格式不正確,請確認是有效的YouTube連結'); return; }
+  if(f.quizError){ alert('測驗題目有問題,尚未儲存:\n'+f.quizError); return; }
   if(__courseFormRequireVideo && !f.referenceOnly && f.videos.length===0){ alert('請至少新增一支有效的YouTube影片,或勾選「僅供參考資料」'); return; }
   if(!f.targetDepts.length && !f.targetStaffIds.length){ if(!confirm('這堂課沒有指定任何「適用部門」或「適用人員」,所有人員都會看到。\n\n確定要這樣儲存嗎?\n(要指定對象,請按「取消」,到表單的「① 誰需要上這堂課」勾選)')) return; }
   const restore = lockBtn(btn, '儲存中...');
@@ -1603,6 +1675,7 @@ async function submitEditCourse(btn, id){
   const f = readCourseForm();
   if(!f.title){ alert(__courseFormRequireVideo? '請填寫課程名稱' : '請填寫文件資料名稱'); return; }
   if(f.hasInvalidVideo){ alert('有一支影片的連結格式不正確,請確認是有效的YouTube連結'); return; }
+  if(f.quizError){ alert('測驗題目有問題,尚未儲存:\n'+f.quizError); return; }
   if(__courseFormRequireVideo && !f.referenceOnly && f.videos.length===0){ alert('請至少新增一支有效的YouTube影片,或勾選「僅供參考資料」'); return; }
   if(!f.targetDepts.length && !f.targetStaffIds.length){ if(!confirm('這堂課沒有指定任何「適用部門」或「適用人員」,所有人員都會看到。\n\n確定要這樣儲存嗎?\n(要指定對象,請按「取消」,到表單的「① 誰需要上這堂課」勾選)')) return; }
   const restore = lockBtn(btn, '儲存中...');
@@ -1681,6 +1754,7 @@ async function markReadComplete(btn, courseId){
 }
 
 function setupPlayer(){
+  stopWatch(false);
   const el = document.getElementById('ytplayer');
   if(!el) return;
   const selected = STATE.courses.find(c=>c.id===STATE.selectedCourseId);
@@ -1714,24 +1788,40 @@ function showPlayerProblem(){
   if(!wrap) return;
   wrap.innerHTML = '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#fff;padding:20px;font-size:14px;line-height:1.7;">影片暫時無法載入<br>請確認網路可以連到 YouTube,重新整理頁面後再試一次<br>若持續發生,請回報管理員</div>';
 }
-async function onPlayerStateChange(e){
-  if(e.data === YT.PlayerState.PLAYING){
-    clearInterval(watchTimer);
-    watchTimer = setInterval(async ()=>{
-      await addWatchSeconds(10);
-    }, 10000);
-  } else {
-    clearInterval(watchTimer);
-    if(e.data === YT.PlayerState.ENDED){
-      await addWatchSeconds(0, true);
-    }
-  }
-}
+/* ---- Watch tracking ----
+   Counts the time actually played, saves on pause / end / leaving the page, tells the person if a save did not
+   go through, and keeps retrying until it does. */
+let __playingSince = null;     // when the current stretch of playing began (ms)
+let __watchCourseId = null;    // the course that stretch belongs to (stays correct even if the page changes)
 let __watchSaving = false;
-async function addWatchSeconds(sec, forceWatched){
+let __watchDirty = false;      // something is waiting to be saved
+let __watchDirtyUser = null;
+
+function setSaveStatus(kind){
+  const el = document.getElementById('watchSaveStatus');
+  if(!el) return;
+  if(kind==='saved'){ el.textContent = '✓ 觀看進度已儲存'; el.style.color = 'var(--ok)'; }
+  else if(kind==='failed'){ el.textContent = '⚠ 觀看進度尚未儲存成功,請先不要關閉此頁面並確認網路,系統會自動重試'; el.style.color = '#b06a54'; }
+  else { el.textContent = '觀看進度儲存中…'; el.style.color = 'var(--sub)'; }
+}
+
+function startWatch(){
+  if(__playingSince===null){ __playingSince = Date.now(); __watchCourseId = STATE.selectedCourseId; }
+  if(!watchTimer) watchTimer = setInterval(()=>{ recordWatch(false); }, 10000);
+}
+
+// Add the time played since the last mark to this person's progress (in memory). Returns true if anything changed.
+function accrueWatch(forceWatched){
   const u = currentUser();
-  const cid = STATE.selectedCourseId;
-  if(!u || !cid) return;
+  const cid = __watchCourseId || STATE.selectedCourseId;
+  if(!u || !cid) return false;
+  let sec = 0;
+  if(__playingSince!==null){
+    const now = Date.now();
+    sec = Math.min(Math.max(Math.round((now - __playingSince)/1000), 0), 60);
+    __playingSince = now;
+  }
+  if(sec<=0 && !forceWatched) return false;
   const mine = STATE.progress[u.id] || (STATE.progress[u.id] = {});
   if(!mine[cid]) mine[cid] = {watchSeconds:0, watched:false, quizPassed:false};
   const p = mine[cid];
@@ -1741,27 +1831,83 @@ async function addWatchSeconds(sec, forceWatched){
   if(p.watchSeconds >= 20 || forceWatched) p.watched = true;
   // Update the on-screen label/pill directly — do NOT call render() here,
   // it would destroy and recreate the YouTube player mid-playback.
-  const label = document.getElementById('watchTimeLabel');
-  if(label){
-    label.textContent = `累計觀看時間:${Math.floor((p.watchSeconds||0)/60)} 分 ${Math.floor((p.watchSeconds||0)%60)} 秒`;
-  }
-  if(justWatched){
-    const pillWrap = document.getElementById('watchedPillWrap');
-    if(pillWrap){
-      const course = STATE.courses.find(c=>c.id===cid);
-      pillWrap.innerHTML = `
-        <span class="pill ok">已觀看</span>
-        ${p.quizPassed? '<span class="pill ok">測驗通過</span>' : (course && course.quiz && course.quiz.length? '<span class="pill warn">待測驗</span>':'')}
-      `;
+  if(cid === STATE.selectedCourseId){
+    const label = document.getElementById('watchTimeLabel');
+    if(label){
+      label.textContent = `累計觀看時間:${Math.floor((p.watchSeconds||0)/60)} 分 ${Math.floor((p.watchSeconds||0)%60)} 秒`;
+    }
+    if(justWatched){
+      const pillWrap = document.getElementById('watchedPillWrap');
+      if(pillWrap){
+        const course = STATE.courses.find(c=>c.id===cid);
+        pillWrap.innerHTML = `
+          <span class="pill ok">已觀看</span>
+          ${p.quizPassed? '<span class="pill ok">測驗通過</span>' : (course && course.quiz && course.quiz.length? '<span class="pill warn">待測驗</span>':'')}
+        `;
+      }
     }
   }
-  // Save this person's own row. Progress keeps accumulating in memory, so a failed save is retried with the next tick.
-  if(__watchSaving && !forceWatched) return;
-  __watchSaving = true;
-  try{ await saveStaffProgress(u.id, mine); }
-  catch(e){ console.error('進度儲存失敗,將於下次自動重試', e); }
-  finally{ __watchSaving = false; }
+  __watchDirty = true;
+  __watchDirtyUser = u.id;
+  return true;
 }
+
+// Save this person's row. If a save is already running it will pick up the newer changes when it finishes.
+async function flushWatchSave(){
+  if(__watchSaving || !__watchDirty) return;
+  __watchSaving = true;
+  setSaveStatus('pending');
+  try{
+    while(__watchDirty){
+      const uid = __watchDirtyUser;
+      __watchDirty = false;
+      await saveStaffProgress(uid, STATE.progress[uid]);
+    }
+    setSaveStatus('saved');
+  }catch(err){
+    __watchDirty = true;
+    console.error('觀看進度儲存失敗,系統會自動重試', err);
+    setSaveStatus('failed');
+  }finally{
+    __watchSaving = false;
+  }
+}
+
+async function recordWatch(forceWatched){
+  accrueWatch(forceWatched);
+  await flushWatchSave();
+}
+
+async function stopWatch(forceWatched){
+  clearInterval(watchTimer); watchTimer = null;
+  accrueWatch(!!forceWatched);
+  __playingSince = null;
+  await flushWatchSave();
+}
+
+async function onPlayerStateChange(e){
+  if(e.data === YT.PlayerState.PLAYING){
+    startWatch();
+  } else if(e.data === YT.PlayerState.ENDED){
+    await stopWatch(true);
+  } else if(e.data === YT.PlayerState.PAUSED){
+    await stopWatch(false);
+  }
+}
+
+// Best-effort send when the page is being closed or hidden.
+function sendProgressBeacon(){
+  try{
+    accrueWatch(false);
+    if(!__watchDirty || !__watchDirtyUser) return;
+    const body = JSON.stringify({ key: PROGRESS_PREFIX+__watchDirtyUser, value: JSON.stringify(STATE.progress[__watchDirtyUser]) });
+    navigator.sendBeacon(API_URL, body);
+  }catch(err){}
+}
+window.addEventListener('pagehide', sendProgressBeacon);
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') sendProgressBeacon(); });
+window.addEventListener('beforeunload', ev=>{ if(__watchDirty || __watchSaving){ ev.preventDefault(); ev.returnValue = ''; } });
+setInterval(()=>{ if(__watchDirty && !__watchSaving) flushWatchSave(); }, 15000);
 
 function goToQuiz(courseId){
   STATE.selectedCourseId = courseId;
@@ -1813,26 +1959,20 @@ function renderQuiz(){
 }
 function selectQuizCourse(id){ STATE.selectedCourseId=id; STATE.quizAnswers={}; STATE.quizResult=null; render(); }
 
+function toggleQuizAnswer(qi, oi, checked){
+  const set = new Set(Array.isArray(STATE.quizAnswers[qi])? STATE.quizAnswers[qi] : []);
+  if(checked) set.add(oi); else set.delete(oi);
+  STATE.quizAnswers[qi] = Array.from(set).sort((a,b)=>a-b);
+}
+
 function renderQuizBody(course, u){
   if(STATE.quizResult && STATE.quizResult.courseId===course.id){
     const r = STATE.quizResult;
     return `
     <div class="card">
       <div class="result-banner ${r.passed?'pass':'fail'}">${r.passed? '✓ 測驗通過':'✗ 未達通過標準'} — 得分 ${r.score}%(答對 ${r.correct}/${r.total} 題)</div>
-      ${r.details.map((d,i)=>`
-        <div class="quiz-q" style="border-color:${d.isCorrect?'var(--border)':'#c98f7c'};">
-          <div style="font-weight:600;margin-bottom:6px;">${i+1}. ${escapeHtml(d.q)} ${d.isCorrect? '<span class="pill ok" style="margin-left:6px;">答對</span>' : '<span class="pill" style="background:#f3e4de;color:#b06a54;margin-left:6px;">答錯</span>'}</div>
-          ${d.options.map((opt,oi)=>{
-            let mark = '　';
-            let style = 'color:var(--sub);';
-            if(oi===d.correct){ mark='✓'; style='color:var(--ok);font-weight:600;'; }
-            else if(oi===d.selected){ mark='✗'; style='color:#b06a54;text-decoration:line-through;'; }
-            return `<div style="padding:3px 0;${style}">${mark} ${escapeHtml(opt)}</div>`;
-          }).join('')}
-          ${(d.selected===undefined||d.selected===null)? '<div class="muted" style="margin-top:4px;">(未作答)</div>' : ''}
-        </div>
-      `).join('')}
-      <button class="btn ghost small" onclick="STATE.quizResult=null;render();">重新測驗</button>
+      ${r.details.map((d,i)=>questionReviewHtml(d,i)).join('')}
+      <button class="btn ghost small" onclick="STATE.quizResult=null;STATE.quizAnswers={};render();">重新測驗</button>
     </div>`;
   }
   return `
@@ -1843,13 +1983,12 @@ function renderQuizBody(course, u){
     </div>
     ${course.quiz.map((q,i)=>`
       <div class="quiz-q">
-        <div style="font-weight:600;margin-bottom:6px;">${i+1}. ${escapeHtml(q.q)}</div>
-        ${q.options.map((opt,oi)=>`
-          <div class="opt-row">
-            <input type="radio" name="q${i}" value="${oi}" onchange="STATE.quizAnswers[${i}]=${oi}">
-            <label>${escapeHtml(opt)}</label>
-          </div>
-        `).join('')}
+        <div style="font-weight:600;margin-bottom:6px;">${i+1}. ${escapeHtml(q.q)}${q.multi? ' <span class="pill warn" style="margin-left:6px;">複選題</span>':''}</div>
+        ${q.multi? '<div class="muted" style="margin-bottom:6px;">請勾選所有正確答案(需要全部選對才算對)</div>' : ''}
+        ${q.options.map((opt,oi)=> q.multi
+          ? `<div class="opt-row"><input type="checkbox" id="q${i}_${oi}" onchange="toggleQuizAnswer(${i},${oi},this.checked)"><label for="q${i}_${oi}">${escapeHtml(opt)}</label></div>`
+          : `<div class="opt-row"><input type="radio" name="q${i}" id="q${i}_${oi}" value="${oi}" onchange="STATE.quizAnswers[${i}]=${oi}"><label for="q${i}_${oi}">${escapeHtml(opt)}</label></div>`
+        ).join('')}
       </div>
     `).join('')}
     <button class="btn accent" onclick="submitQuiz(this,'${course.id}')">送出答案</button>
@@ -1860,12 +1999,14 @@ function renderQuizBody(course, u){
 async function submitQuiz(btn, courseId){
   const course = STATE.courses.find(c=>c.id===courseId);
   const u = currentUser();
+  const unansweredCount = course.quiz.filter((q,i)=> toArr(STATE.quizAnswers[i]).length===0).length;
+  if(unansweredCount>0 && !confirm('還有 '+unansweredCount+' 題尚未作答,送出後這幾題會算答錯。\n\n確定要送出嗎?')) return;
   let correct = 0;
   const details = course.quiz.map((q,i)=>{
     const selected = STATE.quizAnswers[i];
-    const isCorrect = selected===q.answer;
+    const isCorrect = gradeQuestion(q, selected);
     if(isCorrect) correct++;
-    return {q:q.q, options:q.options, selected, correct:q.answer, isCorrect};
+    return {q:q.q, options:q.options, selected, correct: q.multi? q.answers : q.answer, isCorrect, multi: !!q.multi};
   });
   const total = course.quiz.length;
   const score = Math.round(correct/total*100);
@@ -2111,7 +2252,7 @@ function afterRender(){
   if(STATE.view==='courses'){
     setupPlayer();
   } else {
-    clearInterval(watchTimer);
+    stopWatch(false);
   }
 }
 

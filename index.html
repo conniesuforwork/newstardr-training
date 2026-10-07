@@ -1657,9 +1657,13 @@ async function deleteCourse(btn, id){
 let ytReadyQueue = [];
 function onYouTubeIframeAPIReady(){
   window.__ytApiReady = true;
-  ytReadyQueue.forEach(fn=>fn());
+  const pending = ytReadyQueue;
   ytReadyQueue = [];
+  pending.forEach(fn=>fn());
 }
+// YouTube's script may already be loaded (e.g. from the browser cache) before this function existed,
+// in which case YouTube's "I'm ready" call was missed. Catch up now.
+if(window.YT && window.YT.Player) onYouTubeIframeAPIReady();
 let watchTimer = null;
 async function markReadComplete(btn, courseId){
   const u = currentUser();
@@ -1686,15 +1690,29 @@ function setupPlayer(){
   const vid = vids[activeIdx]? ytId(vids[activeIdx].url) : null;
   if(!vid) return;
   const start = ()=>{
-    STATE.player = new YT.Player('ytplayer', {
-      videoId: vid,
-      playerVars: {rel:0},
-      events:{
-        onStateChange: onPlayerStateChange
-      }
-    });
+    try{
+      STATE.player = new YT.Player('ytplayer', {
+        videoId: vid,
+        playerVars: {rel:0},
+        events:{
+          onStateChange: onPlayerStateChange
+        }
+      });
+    }catch(err){
+      console.error('影片播放器建立失敗', err);
+      showPlayerProblem();
+    }
   };
-  if(window.__ytApiReady) start(); else ytReadyQueue.push(start);
+  if(window.YT && window.YT.Player) start(); else ytReadyQueue = [start];
+  // If YouTube's player script still isn't available after a while (blocked / very slow network), say so.
+  setTimeout(()=>{
+    if(!(window.YT && window.YT.Player) && document.getElementById('ytplayer')) showPlayerProblem();
+  }, 8000);
+}
+function showPlayerProblem(){
+  const wrap = document.querySelector('.video-wrap');
+  if(!wrap) return;
+  wrap.innerHTML = '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#fff;padding:20px;font-size:14px;line-height:1.7;">影片暫時無法載入<br>請確認網路可以連到 YouTube,重新整理頁面後再試一次<br>若持續發生,請回報管理員</div>';
 }
 async function onPlayerStateChange(e){
   if(e.data === YT.PlayerState.PLAYING){

@@ -711,6 +711,7 @@ async function attemptLogin(){
     }
   }
   const hasAnyAdmin = STATE.staff.some(s=>s.role==='admin');
+  STATE.adminSecret = '';
   if(hasAnyAdmin && staffObj.role==='admin'){
     const pwInput = document.getElementById('loginPasswordInput');
     const pwVal = pwInput? pwInput.value : '';
@@ -720,6 +721,7 @@ async function attemptLogin(){
       errEl.style.display = '';
       return;
     }
+    STATE.adminSecret = pwVal;
   }
   STATE.currentUserId = staffObj.id;
   await saveCurrentUser(STATE.currentUserId);
@@ -1099,6 +1101,153 @@ async function togglePublish(btn, id){
   if(pi>=0) STATE.courses[pi] = c;
   alert(willPublish? '✅ 已發布,指定的同仁現在可以看到了。' : '已改回草稿,同仁暫時看不到。');
   render();
+  if(willPublish && confirm('已發布。要現在寄信通知同仁有新課程嗎?\n\n(也可以之後在課程頁面按「📣 通知同仁」)')) openNotifyDialog(id);
+}
+
+/* ---------- Tell staff about a new course (e-mail) ---------- */
+const EMAIL_OK = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+let __notifyCourseId = null;
+
+function postJson(url, data, ms){
+  return new Promise((resolve, reject)=>{
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url, true);
+    const timer = setTimeout(()=>{ xhr.abort(); reject(new Error('timeout')); }, ms || 90000);
+    xhr.onload = ()=>{ clearTimeout(timer); try{ resolve(JSON.parse(xhr.responseText)); }catch(e){ reject(new Error('bad-response')); } };
+    xhr.onerror = ()=>{ clearTimeout(timer); reject(new Error('network error')); };
+    xhr.send(JSON.stringify(data));
+  });
+}
+function audienceLabel(c){
+  const depts = c.targetDepts||[], ids = c.targetStaffIds||[];
+  if(!depts.length && !ids.length) return '全體同仁';
+  const parts = [];
+  if(depts.length) parts.push(depts.join('、'));
+  if(ids.length) parts.push('另有指定人員');
+  return parts.join(' + ');
+}
+function notifyButtonHtml(c){
+  return isPublished(c)? `<button class="btn ghost small" onclick="openNotifyDialog('${c.id}')">📣 通知同仁</button>` : '';
+}
+function notifyInfoHtml(c){
+  if(!c.notifiedAt) return '';
+  return `<div class="muted" style="margin-top:10px;">📣 上次通知:${fmtTime(c.notifiedAt)},共寄給 ${c.notifiedCount||0} 人</div>`;
+}
+async function notifySupported(){
+  try{ const v = await jsonpRequestWithRetry({action:'caps'}, 1, 20000); return !!(v && v.notify); }
+  catch(e){ return false; }
+}
+function openNotifyDialog(id){
+  const c = STATE.courses.find(x=>x.id===id);
+  if(!c) return;
+  if(!isPublished(c)){ alert('這是草稿,請先發布才能通知同仁。'); return; }
+  __notifyCourseId = id;
+  const targetIds = new Set(staffForCourse(c).map(s=>s.id));
+  const groups = {}, order = [];
+  sortedStaff().forEach(s=>{
+    const k = s.dept || '未分類';
+    if(!groups[k]){ groups[k] = []; order.push(k); }
+    groups[k].push(s);
+  });
+  const listHtml = order.map((k,gi)=>{
+    const people = groups[k];
+    const peopleHtml = people.map(s=>{
+      const hasMail = EMAIL_OK.test((s.email||'').trim());
+      return `<label style="display:inline-flex;align-items:center;gap:4px;font-size:13px;${hasMail?'':'color:var(--sub);'}"><input type="checkbox" class="notifyPerson" value="${s.id}" data-g="${gi}" ${hasMail?'':'disabled'} ${(hasMail && targetIds.has(s.id))?'checked':''} onchange="notifyRefresh()"> ${escapeHtml(s.name)}${hasMail?'':'(沒有Email)'}</label>`;
+    }).join('');
+    return `<div style="margin-top:8px;"><label style="font-size:13px;font-weight:700;"><input type="checkbox" class="notifyDept" data-g="${gi}" onchange="notifyToggleDept(this)"> ${escapeHtml(k)} <span class="muted" style="font-weight:400;">(${people.length} 人)</span></label><div style="margin:4px 0 0 22px;display:flex;flex-wrap:wrap;gap:4px 16px;">${peopleHtml}</div></div>`;
+  }).join('');
+  const body = `
+    <div class="muted" style="margin-bottom:8px;line-height:1.6;">預設已勾選這${courseTab(c)==='course'?'堂課':'份資料'}的適用對象(${escapeHtml(audienceLabel(c))}),可以自行增減。沒有填 Email 的人無法寄信。</div>
+    ${c.notifiedAt? `<div class="muted" style="margin-bottom:8px;">📣 上次通知:${fmtTime(c.notifiedAt)},共寄給 ${c.notifiedCount||0} 人</div>` : ''}
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+      <button class="btn ghost small" onclick="notifySelect('targets')">只選適用對象</button>
+      <button class="btn ghost small" onclick="notifySelect('all')">全選</button>
+      <button class="btn ghost small" onclick="notifySelect('none')">全部取消</button>
+    </div>
+    <div id="notifyList" style="max-height:280px;overflow:auto;border:1px solid var(--border);border-radius:10px;padding:4px 12px 10px;">${listHtml}</div>
+    <div id="notifyCount" style="margin:10px 0;font-weight:700;"></div>
+    <textarea id="notifyNote" placeholder="想補充的話(選填),例如:請在本週內完成學習" style="width:100%;min-height:60px;"></textarea>
+    <div class="muted" style="margin:8px 0 12px;line-height:1.6;">信件由系統的 Google 帳號寄出,同仁若沒收到,請他們到「垃圾郵件」找找。每天最多可寄約 100 封。</div>
+    <button class="btn accent" onclick="sendNewCourseNotice(this)">寄出通知</button>
+  `;
+  showModal(`📣 通知同仁:${escapeHtml(c.title)}`, body);
+  notifyRefresh();
+}
+function notifyRefresh(){
+  const persons = Array.from(document.querySelectorAll('.notifyPerson'));
+  const checked = persons.filter(p=>p.checked && !p.disabled);
+  const el = document.getElementById('notifyCount');
+  if(el) el.textContent = checked.length? '將寄給 '+checked.length+' 位同仁' : '還沒有勾選任何人';
+  document.querySelectorAll('.notifyDept').forEach(d=>{
+    const g = persons.filter(p=>p.dataset.g===d.dataset.g && !p.disabled);
+    d.checked = g.length>0 && g.every(p=>p.checked);
+    d.disabled = g.length===0;
+  });
+}
+function notifyToggleDept(el){
+  document.querySelectorAll('.notifyPerson').forEach(p=>{ if(p.dataset.g===el.dataset.g && !p.disabled) p.checked = el.checked; });
+  notifyRefresh();
+}
+function notifySelect(mode){
+  const c = STATE.courses.find(x=>x.id===__notifyCourseId);
+  const targetIds = new Set(c? staffForCourse(c).map(s=>s.id) : []);
+  document.querySelectorAll('.notifyPerson').forEach(p=>{
+    if(p.disabled) return;
+    p.checked = (mode==='all')? true : (mode==='none')? false : targetIds.has(p.value);
+  });
+  notifyRefresh();
+}
+async function sendNewCourseNotice(btn){
+  const c = STATE.courses.find(x=>x.id===__notifyCourseId);
+  const admin = currentUser();
+  if(!c || !admin) return;
+  const ids = Array.from(document.querySelectorAll('.notifyPerson:checked')).filter(p=>!p.disabled).map(p=>p.value);
+  if(!ids.length){ alert('請先勾選要通知的同仁。'); return; }
+  if(!STATE.adminSecret){ alert('需要重新整理頁面,並用管理員身分(含密碼)登入後,才能寄送通知。'); return; }
+  if(!confirm('確定要寄出通知信給 '+ids.length+' 位同仁嗎?\n\n寄出後無法收回。')) return;
+  const note = (document.getElementById('notifyNote').value || '').trim();
+  const restore = lockBtn(btn, '寄送中,請稍候…');
+  if(!(await notifySupported())){
+    restore();
+    alert('Apps Script 還沒有更新到支援「寄信」的版本,所以沒有寄出任何信。\n\n請先照說明更新 Apps Script 並重新部署。');
+    return;
+  }
+  let res;
+  try{
+    res = await postJson(API_URL, {
+      action:'notify', adminId:admin.id, adminPassword:STATE.adminSecret, staffIds:ids,
+      title:c.title, desc:c.desc||'', audience:audienceLabel(c), note, siteUrl: location.origin + location.pathname
+    });
+  }catch(e){
+    restore();
+    alert('連線逾時,無法確認信件是否已經寄出。\n\n請先到寄件的 Gmail「寄件備份」確認,避免重複寄送。');
+    return;
+  }
+  restore();
+  if(!res || res.status==='denied'){ alert('管理員身分驗證失敗,沒有寄出任何信。\n\n請重新整理頁面,用管理員身分重新登入後再試。'); return; }
+  if(res.status==='quota'){ alert('今天的寄信額度不夠:還能寄 '+res.remaining+' 封,這次需要 '+res.needed+' 封。\n\n請減少人數,或明天再寄。'); return; }
+  if(res.status!=='ok' || typeof res.sent!=='number'){ alert('寄送時發生問題,沒有寄出信件:'+((res && res.message)||'未知原因')); return; }
+  // remember that this one has been announced
+  try{
+    const fresh = await loadCourse(c.id);
+    if(fresh && !fresh.deleted){
+      fresh.notifiedAt = new Date().toISOString();
+      fresh.notifiedCount = res.sent;
+      await saveCourse(fresh);
+      const i = STATE.courses.findIndex(x=>x.id===c.id);
+      if(i>=0) STATE.courses[i] = fresh;
+    }
+  }catch(e){ console.error('記錄通知時間失敗', e); }
+  render();
+  const skipped = res.skipped||[], failed = res.failed||[];
+  showModal('📣 通知結果', `
+    <div style="font-size:15px;margin-bottom:10px;">✅ 已寄出 <b>${res.sent}</b> 封通知信。</div>
+    ${skipped.length? `<div class="muted" style="margin-bottom:6px;">沒有寄到(Email 缺少或格式不正確):${skipped.map(escapeHtml).join('、')}</div>` : ''}
+    ${failed.length? `<div style="color:#b06a54;margin-bottom:6px;">寄送失敗:${failed.map(escapeHtml).join('、')}</div>` : ''}
+    <div class="muted" style="margin-bottom:12px;">今天還能再寄約 ${res.remaining} 封。</div>
+    <button class="btn accent" onclick="closeModal()">關閉</button>
+  `);
 }
 
 function prereqBadgeHtml(c, admin){
@@ -1300,9 +1449,11 @@ function renderCourses(){
           ${admin? `
           <div style="margin-top:10px;">
             <button class="btn ${isPublished(selected)?'ghost':'accent'} small" onclick="togglePublish(this,'${selected.id}')">${isPublished(selected)?'⏸ 改回草稿':'✅ 發布給同仁'}</button>
+            ${notifyButtonHtml(selected)}
             <button class="btn ghost small" onclick="togglePin(this,'${selected.id}')">${selected.pinned?'取消重要標記':'⭐ 設為重要'}</button>
             <button class="btn ghost small" onclick="showEditCourseForm('${selected.id}',true)">編輯課程</button>
             <button class="icon-btn" style="margin-left:10px;" onclick="deleteCourse(this,'${selected.id}')">刪除此課程</button>
+            ${notifyInfoHtml(selected)}
           </div>` : ''}
         </div>
       `) : `<div class="card empty">${admin? '尚未選擇課程,請先新增或於右側選擇。' : '目前沒有指派給您的課程。'}</div>`}
@@ -1380,9 +1531,11 @@ function renderDocuments(){
           ${admin? `
           <div style="margin-top:10px;">
             <button class="btn ${isPublished(selected)?'ghost':'accent'} small" onclick="togglePublish(this,'${selected.id}')">${isPublished(selected)?'⏸ 改回草稿':'✅ 發布給同仁'}</button>
+            ${notifyButtonHtml(selected)}
             <button class="btn ghost small" onclick="togglePin(this,'${selected.id}')">${selected.pinned?'取消重要標記':'⭐ 設為重要'}</button>
             <button class="btn ghost small" onclick="showEditCourseForm('${selected.id}',false)">編輯資料</button>
             <button class="icon-btn" style="margin-left:10px;" onclick="deleteCourse(this,'${selected.id}')">刪除此文件資料</button>
+            ${notifyInfoHtml(selected)}
           </div>` : ''}
         </div>
       `) : `<div class="card empty">${admin? '尚未選擇文件資料,請先新增或於右側選擇。' : '目前沒有指派給您的文件資料。'}</div>`}
@@ -1788,6 +1941,7 @@ async function submitNewCourse(btn){
   STATE.selectedCourseId = course.id;
   document.getElementById('addCourseFormWrap').innerHTML='';
   render();
+  if(course.published && confirm('已發布。要現在寄信通知同仁有新課程嗎?\n\n(也可以之後在課程頁面按「📣 通知同仁」)')) openNotifyDialog(course.id);
 }
 
 async function submitEditCourse(btn, id){
@@ -1798,6 +1952,7 @@ async function submitEditCourse(btn, id){
   let c;
   try{ c = await loadCourse(id); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   if(!c || c.deleted){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
+  const wasPubBefore = isPublished(c);
   c.published = (f.status==='published'); if(!c.kind) c.kind = __courseFormRequireVideo? 'course':'doc';
   c.title = f.title; c.desc = f.desc; c.category = f.category; c.referenceOnly = f.referenceOnly; c.prerequisiteIds = f.prerequisiteIds; c.notifyEmails = f.notifyEmails;
   if(__courseFormRequireVideo){ c.videos = f.videos; c.videoUrl = f.videos[0]? f.videos[0].url:''; }
@@ -1810,6 +1965,7 @@ async function submitEditCourse(btn, id){
   if(ci>=0) STATE.courses[ci] = c; else STATE.courses.push(c);
   document.getElementById('addCourseFormWrap').innerHTML='';
   render();
+  if(c.published && !wasPubBefore && confirm('已發布。要現在寄信通知同仁有新課程嗎?\n\n(也可以之後在課程頁面按「📣 通知同仁」)')) openNotifyDialog(id);
 }
 
 async function togglePin(btn, id){

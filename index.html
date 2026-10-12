@@ -318,7 +318,26 @@ async function loadStaffProgress(staffId){
   const v = await apiGet(PROGRESS_PREFIX+staffId);
   return (v && typeof v==='object' && !Array.isArray(v))? v : {};
 }
-async function saveStaffProgress(staffId, obj){ await apiSet(PROGRESS_PREFIX+staffId, obj); }
+/* One person's record lives in one spreadsheet cell (hard limit 50,000 characters; the server accepts 45,000).
+   Safety valve: when the record gets close, drop the OLDEST quiz details first — the latest score/pass/watch status
+   of every course is always kept. Normally never triggers. Changes the object in place so memory matches what is saved. */
+const CELL_LIMIT = 45000;
+const TRIM_AT = 36000;
+function trimProgressForSize(obj){
+  if(!obj || JSON.stringify(obj).length <= TRIM_AT) return obj;
+  for(const keep of [3,2,1,0]){
+    Object.keys(obj).forEach(k=>{
+      const p = obj[k];
+      if(p && typeof p==='object' && Array.isArray(p.quizHistory)){
+        p.quizHistory = keep? p.quizHistory.slice(-keep) : [];
+        if(!p.quizHistory.length) delete p.quizHistory;
+      }
+    });
+    if(JSON.stringify(obj).length <= TRIM_AT) break;
+  }
+  return obj;
+}
+async function saveStaffProgress(staffId, obj){ trimProgressForSize(obj); await apiSet(PROGRESS_PREFIX+staffId, obj); }
 
 // Quiz attempts are stored compactly (answers + right/wrong), not with full question text.
 // A question may be single-answer (q.answer = index) or multi-answer (q.multi = true, q.answers = [indexes]).
@@ -1318,6 +1337,55 @@ async function sendNewCourseNotice(btn){
   `);
 }
 
+function capacityReport(){
+  const clean = STATE.staff.map(s=>{ const o = Object.assign({}, s); delete o.hasPassword; delete o.password; return o; });
+  const staffChars = JSON.stringify(clean).length;
+  const perPerson = STATE.staff.length? Math.ceil(staffChars/STATE.staff.length) : 150;
+  let maxProg = {chars:0, name:''}, progTotal = 0;
+  STATE.staff.forEach(s=>{
+    const t = JSON.stringify(STATE.progress[s.id] || {}).length;
+    progTotal += t;
+    if(t > maxProg.chars) maxProg = {chars:t, name:s.name};
+  });
+  let maxCourse = {chars:0, title:''}, courseTotal = 0;
+  STATE.courses.forEach(c=>{
+    const t = JSON.stringify(c).length;
+    courseTotal += t;
+    if(t > maxCourse.chars) maxCourse = {chars:t, title:c.title||''};
+  });
+  return {
+    staffChars, perPerson, staffCount: STATE.staff.length, staffCapacity: Math.floor(CELL_LIMIT/perPerson),
+    maxProg, maxCourse, loadKB: Math.round((staffChars + progTotal + courseTotal)/1024)
+  };
+}
+function capacityCardHtml(){
+  const r = capacityReport();
+  const pct = n => Math.min(100, Math.round(n/CELL_LIMIT*100));
+  const color = p => p>=85? '#b06a54' : (p>=60? 'var(--warn)' : 'var(--ok)');
+  const row = (label, chars, note)=>{
+    const p = pct(chars);
+    return `<div style="margin-bottom:12px;">
+      <div class="bar-row"><div class="name">${label}</div><div class="bar-track"><div class="bar-fill" style="width:${p}%;background:${color(p)};"></div></div><div class="pct" style="color:${color(p)};">${p}%</div></div>
+      <div class="muted" style="font-size:12px;margin-top:2px;">${note}</div>
+    </div>`;
+  };
+  const loadColor = r.loadKB>=2000? '#b06a54' : (r.loadKB>=1000? 'var(--warn)' : 'var(--ok)');
+  const worst = Math.max(pct(r.staffChars), pct(r.maxProg.chars), pct(r.maxCourse.chars));
+  const status = (worst>=70 || r.loadKB>=1000)
+    ? '<div style="color:var(--warn);font-weight:700;margin-bottom:10px;">⚠ 有資料快要滿了,或網站開始變重,請看下面標色的項目</div>'
+    : '<div style="color:var(--ok);font-weight:700;margin-bottom:10px;">✓ 目前所有資料都還很充裕</div>';
+  return `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="section-title" style="margin-top:0;">📊 資料容量檢查</div>
+      ${status}
+      ${row('人員名單', r.staffChars, '目前 '+r.staffCount+' 人,約可容納 '+r.staffCapacity+' 人(還能再新增約 '+Math.max(0, r.staffCapacity-r.staffCount)+' 人)')}
+      ${row('學習紀錄(最大的一位)', r.maxProg.chars, (r.maxProg.name? escapeHtml(r.maxProg.name)+' 的紀錄最大。' : '')+'快滿時系統會自動清掉最舊的測驗明細,保留最新成績,不會存不進去')}
+      ${row('課程(最大的一堂)', r.maxCourse.chars, r.maxCourse.title? escapeHtml(r.maxCourse.title) : '')}
+      <div style="margin-top:6px;"><b>每次開啟網站要下載:</b><span style="color:${loadColor};font-weight:700;"> ${r.loadKB} KB</span></div>
+      <div class="muted" style="font-size:12px;margin-top:2px;">同仁人數超過約 100 位時,開啟網站會明顯變慢(每個人都會載入全部人的紀錄)。到那時請告訴我,可以改成「只載入自己的紀錄」。</div>
+    </div>`;
+}
+
 function prereqBadgeHtml(c, admin){
   if(!admin) return '';
   const ids = coursePrerequisiteIds(c);
@@ -1424,6 +1492,7 @@ function renderDashboard(){
 
   ${draftsOverviewHtml()}
   ${gatedCoursesOverviewHtml()}
+  ${capacityCardHtml()}
 
   <div class="section-title">我的課程進度</div>
   <div class="card">
@@ -2245,6 +2314,7 @@ function sendProgressBeacon(){
   try{
     accrueWatch(false);
     if(!__watchDirty || !__watchDirtyUser) return;
+    trimProgressForSize(STATE.progress[__watchDirtyUser]);
     const body = JSON.stringify({ key: PROGRESS_PREFIX+__watchDirtyUser, value: JSON.stringify(STATE.progress[__watchDirtyUser]) });
     navigator.sendBeacon(API_URL, body);
   }catch(err){}

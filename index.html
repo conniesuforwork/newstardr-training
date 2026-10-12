@@ -185,6 +185,7 @@ function xhrPost(url, data){
       clearTimeout(timer);
       const t = xhr.responseText || '';
       // Apps Script answers {"status":"ok"} on success; an error page (e.g. cell too large) must NOT count as saved.
+      if(/"status"\s*:\s*"unauthorized"/.test(t)){ reject(new Error('unauthorized')); return; }
       if(xhr.status>=200 && xhr.status<300 && (t==='' || /"status"\s*:\s*"ok"/.test(t))) resolve(t);
       else reject(new Error('write-failed'));
     };
@@ -197,6 +198,7 @@ async function xhrPostWithRetry(url, data, retries){
   try{
     return await xhrPost(url, data);
   }catch(e){
+    if(e && e.message==='unauthorized') throw e; // retrying cannot help
     if(retries > 0){
       await new Promise(r=>setTimeout(r, 1000));
       return xhrPostWithRetry(url, data, retries-1);
@@ -210,11 +212,47 @@ async function apiGet(key){
 }
 async function apiSet(key, value){
   // POST body has no practical size limit, unlike a GET query string — safe for large courses/quizzes
-  await xhrPostWithRetry(API_URL, { key: key, value: JSON.stringify(value) });
+  const body = { key: key, value: JSON.stringify(value) };
+  if(STATE.adminToken) body.token = STATE.adminToken; // proves this is a logged-in admin (checked by the server)
+  try{ await xhrPostWithRetry(API_URL, body); }
+  catch(e){
+    if(e && e.message==='unauthorized') handleSessionExpired();
+    throw e;
+  }
+}
+
+/* ---------- Admin login is verified by the server ---------- */
+// What this Apps Script supports. An old script answers null (no server-side login); a network problem throws.
+async function ensureServerCaps(){
+  if(STATE.serverCaps) return STATE.serverCaps;
+  const v = await jsonpRequestWithRetry({action:'caps'}, 1, 20000);
+  STATE.serverCaps = { auth: !!(v && v.auth), notify: !!(v && v.notify) };
+  return STATE.serverCaps;
+}
+function handleSessionExpired(){
+  if(!STATE.adminToken) return;
+  STATE.adminToken = '';
+  STATE.dbAlertMuteUntil = Date.now() + 5000; // the save-failed messages that follow would only confuse
+  alert('管理員登入已逾時(或已在其他地方登出),請重新登入後再操作。');
+  showLoginGate();
+}
+function dbAlert(msg){
+  if(Date.now() < (STATE.dbAlertMuteUntil||0)) return;
+  alert(msg);
+}
+async function setAdminPassword(staffId, password){
+  const res = await postJson(API_URL, {action:'setPassword', token:STATE.adminToken, staffId, password}, 30000);
+  if(res && res.status==='unauthorized'){ handleSessionExpired(); throw new Error('unauthorized'); }
+  if(!res || res.status!=='ok') throw new Error((res && (res.message||res.status)) || 'set-password-failed');
 }
 
 async function loadStaff(){ const v = await apiGet('lms-staff'); return v===null? [] : v; }
-async function saveStaff(list){ await apiSet('lms-staff', list); }
+async function saveStaff(list){
+  // "hasPassword" is only a display flag from the server; passwords never go back with the list (the server keeps them encrypted)
+  const hasAuth = !!(STATE.serverCaps && STATE.serverCaps.auth);
+  const clean = list.map(s=>{ const o = Object.assign({}, s); delete o.hasPassword; if(hasAuth) delete o.password; return o; });
+  await apiSet('lms-staff', clean);
+}
 
 /* Courses: stored one-per-row (key "lms-course:<id>") so no single cell ever
    approaches Google Sheets' ~50,000-character limit. A small index row keeps the
@@ -376,7 +414,10 @@ async function loadInitialData(){
     if(!courses.length && bulk['lms-course-index']===undefined){
       __loadStage = '搬移舊課程資料';
       const legacy = await apiGet('lms-courses');
-      if(Array.isArray(legacy) && legacy.length){ await saveCourses(legacy); courses = legacy; }
+      if(Array.isArray(legacy) && legacy.length){
+        courses = legacy;
+        try{ await saveCourses(legacy); }catch(e){ console.error('舊課程資料搬移失敗(需要管理員登入才能儲存),先以舊資料顯示', e); }
+      }
     }
     const rows = {};
     Object.keys(bulk).forEach(k=>{
@@ -404,7 +445,10 @@ async function loadInitialData(){
     courses = rows.filter(v=>v && typeof v==='object' && !v.deleted);
   } else {
     const legacy = await apiGet('lms-courses');
-    if(Array.isArray(legacy) && legacy.length){ await saveCourses(legacy); courses = legacy; }
+    if(Array.isArray(legacy) && legacy.length){
+      courses = legacy;
+      try{ await saveCourses(legacy); }catch(e){ console.error('舊課程資料搬移失敗(需要管理員登入才能儲存),先以舊資料顯示', e); }
+    }
   }
   __loadStage = '讀取個人進度(相容模式)';
   const arr = await poolMap(staff, 3, s=>apiGet(PROGRESS_PREFIX+s.id));
@@ -543,6 +587,11 @@ function bindNav(){
 /* ---------- Login gate ---------- */
 function showLoginGate(){
   stopWatch(false);
+  if(STATE.adminToken){
+    const t = STATE.adminToken;
+    STATE.adminToken = '';
+    try{ postJson(API_URL, {action:'logout', token:t}, 15000).catch(()=>{}); }catch(e){}
+  }
   document.getElementById('loginGate').style.display = 'flex';
   document.querySelector('.app').style.display = 'none';
   renderLoginGateContent();
@@ -692,6 +741,12 @@ function updateLoginFieldsVisibility(){
 }
 
 async function attemptLogin(){
+  if(STATE.loggingIn) return; // ignore double clicks while the server is checking
+  STATE.loggingIn = true;
+  try{ await attemptLoginInner(); }
+  finally{ STATE.loggingIn = false; }
+}
+async function attemptLoginInner(){
   const sel = document.getElementById('loginUserSelect');
   const staffObj = STATE.staff.find(s=>s.id===sel.value);
   const errEl = document.getElementById('loginError');
@@ -711,17 +766,30 @@ async function attemptLogin(){
     }
   }
   const hasAnyAdmin = STATE.staff.some(s=>s.role==='admin');
-  STATE.adminSecret = '';
+  STATE.adminToken = '';
   if(hasAnyAdmin && staffObj.role==='admin'){
     const pwInput = document.getElementById('loginPasswordInput');
     const pwVal = pwInput? pwInput.value : '';
-    const expectedPw = staffObj.password || STATE.adminPassword;
-    if(pwVal !== expectedPw){
-      errEl.textContent = '管理員密碼不正確。';
-      errEl.style.display = '';
-      return;
+    const fail = (msg)=>{ errEl.textContent = msg; errEl.style.display = ''; };
+    errEl.textContent = '驗證中…'; errEl.style.display = '';
+    let caps;
+    try{ caps = await ensureServerCaps(); }
+    catch(e){ fail('連線不穩,無法驗證管理員身分,請稍後再試一次。'); return; }
+    if(caps.auth){
+      let res;
+      try{ res = await postJson(API_URL, {action:'adminLogin', staffId:staffObj.id, password:pwVal}, 30000); }
+      catch(e){ fail('連線不穩,無法驗證管理員身分,請稍後再試一次。'); return; }
+      if(!res || res.status!=='ok' || !res.token){
+        fail(res && res.status==='locked'? '密碼連續錯誤太多次,請 10 分鐘後再試。' : '管理員密碼不正確。');
+        return;
+      }
+      STATE.adminToken = res.token;
+    } else {
+      // older Apps Script without server-side login: compare here, as before
+      const expectedPw = staffObj.password || STATE.adminPassword;
+      if(pwVal !== expectedPw){ fail('管理員密碼不正確。'); return; }
     }
-    STATE.adminSecret = pwVal;
+    errEl.style.display = 'none';
   }
   STATE.currentUserId = staffObj.id;
   await saveCurrentUser(STATE.currentUserId);
@@ -1092,11 +1160,11 @@ async function togglePublish(btn, id){
   }
   const restore = lockBtn(btn, '處理中...');
   let c;
-  try{ c = await loadCourse(id); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
+  try{ c = await loadCourse(id); }catch(e){ dbAlert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   if(!c || c.deleted){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
   c.published = willPublish;
   try{ await saveCourse(c); }
-  catch(e){ alert('無法連線到資料庫,尚未儲存,請確認網路連線後再試一次。'); restore(); return; }
+  catch(e){ dbAlert('無法連線到資料庫,尚未儲存,請確認網路連線後再試一次。'); restore(); return; }
   const pi = STATE.courses.findIndex(x=>x.id===id);
   if(pi>=0) STATE.courses[pi] = c;
   alert(willPublish? '✅ 已發布,指定的同仁現在可以看到了。' : '已改回草稿,同仁暫時看不到。');
@@ -1204,7 +1272,7 @@ async function sendNewCourseNotice(btn){
   if(!c || !admin) return;
   const ids = Array.from(document.querySelectorAll('.notifyPerson:checked')).filter(p=>!p.disabled).map(p=>p.value);
   if(!ids.length){ alert('請先勾選要通知的同仁。'); return; }
-  if(!STATE.adminSecret){ alert('需要重新整理頁面,並用管理員身分(含密碼)登入後,才能寄送通知。'); return; }
+  if(!STATE.adminToken){ alert('需要重新整理頁面,並用管理員身分(含密碼)登入後,才能寄送通知。'); return; }
   if(!confirm('確定要寄出通知信給 '+ids.length+' 位同仁嗎?\n\n寄出後無法收回。')) return;
   const note = (document.getElementById('notifyNote').value || '').trim();
   const restore = lockBtn(btn, '寄送中,請稍候…');
@@ -1216,7 +1284,7 @@ async function sendNewCourseNotice(btn){
   let res;
   try{
     res = await postJson(API_URL, {
-      action:'notify', adminId:admin.id, adminPassword:STATE.adminSecret, staffIds:ids,
+      action:'notify', token:STATE.adminToken, staffIds:ids,
       title:c.title, desc:c.desc||'', audience:audienceLabel(c), note, siteUrl: location.origin + location.pathname
     });
   }catch(e){
@@ -1225,7 +1293,7 @@ async function sendNewCourseNotice(btn){
     return;
   }
   restore();
-  if(!res || res.status==='denied'){ alert('管理員身分驗證失敗,沒有寄出任何信。\n\n請重新整理頁面,用管理員身分重新登入後再試。'); return; }
+  if(!res || res.status==='denied' || res.status==='unauthorized'){ alert('管理員登入已逾時或驗證失敗,沒有寄出任何信。\n\n請重新整理頁面,用管理員身分重新登入後再試。'); handleSessionExpired(); return; }
   if(res.status==='quota'){ alert('今天的寄信額度不夠:還能寄 '+res.remaining+' 封,這次需要 '+res.needed+' 封。\n\n請減少人數,或明天再寄。'); return; }
   if(res.status!=='ok' || typeof res.sent!=='number'){ alert('寄送時發生問題,沒有寄出信件:'+((res && res.message)||'未知原因')); return; }
   // remember that this one has been announced
@@ -1289,7 +1357,7 @@ async function toggleLocking(btn){
   try{
     await saveLockingEnabled(next);
   }catch(e){
-    alert('無法連線到資料庫,請確認網路連線後再試一次。');
+    dbAlert('無法連線到資料庫,請確認網路連線後再試一次。');
     restore();
     return;
   }
@@ -1932,7 +2000,7 @@ async function submitNewCourse(btn){
   const restore = lockBtn(btn, '儲存中...');
   const course = {id:uid(), published: f.status==='published', kind: __courseFormRequireVideo? 'course':'doc', title:f.title, desc:f.desc, category:f.category, referenceOnly:f.referenceOnly, prerequisiteIds:f.prerequisiteIds, notifyEmails:f.notifyEmails, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts, targetStaffIds:f.targetStaffIds, quizExemptDepts:f.quizExemptDepts, quizExemptStaffIds:f.quizExemptStaffIds, lockExemptDepts:f.lockExemptDepts, lockExemptStaffIds:f.lockExemptStaffIds};
   try{ await saveCourse(course); }
-  catch(e){ alert('無法連線到資料庫,這堂課尚未儲存,請確認網路連線後再試一次。'); restore(); return; }
+  catch(e){ dbAlert('無法連線到資料庫,這堂課尚未儲存,請確認網路連線後再試一次。'); restore(); return; }
   try{
     const idx = await loadCourseIndex();
     if(!idx.includes(course.id)){ idx.push(course.id); await saveCourseIndex(idx); }
@@ -1950,7 +2018,7 @@ async function submitEditCourse(btn, id){
   if(!checkBeforeSave(f, (()=>{ const ex = STATE.courses.find(x=>x.id===id); return !!ex && isPublished(ex); })())) return;
   const restore = lockBtn(btn, '儲存中...');
   let c;
-  try{ c = await loadCourse(id); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
+  try{ c = await loadCourse(id); }catch(e){ dbAlert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   if(!c || c.deleted){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
   const wasPubBefore = isPublished(c);
   c.published = (f.status==='published'); if(!c.kind) c.kind = __courseFormRequireVideo? 'course':'doc';
@@ -1960,7 +2028,7 @@ async function submitEditCourse(btn, id){
   c.quizExemptDepts = f.quizExemptDepts; c.quizExemptStaffIds = f.quizExemptStaffIds;
   c.lockExemptDepts = f.lockExemptDepts; c.lockExemptStaffIds = f.lockExemptStaffIds;
   try{ await saveCourse(c); }
-  catch(e){ alert('無法連線到資料庫,修改尚未儲存,請確認網路連線後再試一次。'); restore(); return; }
+  catch(e){ dbAlert('無法連線到資料庫,修改尚未儲存,請確認網路連線後再試一次。'); restore(); return; }
   const ci = STATE.courses.findIndex(x=>x.id===id);
   if(ci>=0) STATE.courses[ci] = c; else STATE.courses.push(c);
   document.getElementById('addCourseFormWrap').innerHTML='';
@@ -1971,11 +2039,11 @@ async function submitEditCourse(btn, id){
 async function togglePin(btn, id){
   const restore = lockBtn(btn, '處理中...');
   let c;
-  try{ c = await loadCourse(id); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
+  try{ c = await loadCourse(id); }catch(e){ dbAlert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   if(!c || c.deleted){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
   c.pinned = !c.pinned;
   try{ await saveCourse(c); }
-  catch(e){ alert('無法連線到資料庫,尚未儲存,請確認網路連線後再試一次。'); restore(); return; }
+  catch(e){ dbAlert('無法連線到資料庫,尚未儲存,請確認網路連線後再試一次。'); restore(); return; }
   const pi = STATE.courses.findIndex(x=>x.id===id);
   if(pi>=0) STATE.courses[pi] = c;
   alert(c.pinned? '⭐ 已設為重要,將顯示在清單最上方!' : '已取消重要標記。');
@@ -1989,7 +2057,7 @@ async function deleteCourse(btn, id){
     const c = (await loadCourse(id)) || {id:id};
     c.deleted = true;
     await saveCourse(c);
-  }catch(e){ alert('無法連線到資料庫,尚未刪除,請確認網路連線後再試一次。'); restore(); return; }
+  }catch(e){ dbAlert('無法連線到資料庫,尚未刪除,請確認網路連線後再試一次。'); restore(); return; }
   try{
     const idx = await loadCourseIndex();
     await saveCourseIndex(idx.filter(x=>x!==id));
@@ -2017,12 +2085,12 @@ async function markReadComplete(btn, courseId){
   const u = currentUser();
   const restore = lockBtn(btn, '儲存中...');
   let mine;
-  try{ mine = await fetchOwnProgress(u.id); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
+  try{ mine = await fetchOwnProgress(u.id); }catch(e){ dbAlert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   if(!mine[courseId]) mine[courseId] = {watchSeconds:0, watched:false, quizPassed:false};
   mine[courseId].watched = true;
   mine[courseId].lastWatchedAt = new Date().toISOString();
   try{ await saveStaffProgress(u.id, mine); }
-  catch(e){ alert('無法連線到資料庫,這次的紀錄尚未儲存,請確認網路連線後再按一次。'); restore(); return; }
+  catch(e){ dbAlert('無法連線到資料庫,這次的紀錄尚未儲存,請確認網路連線後再按一次。'); restore(); return; }
   STATE.progress[u.id] = mine;
   alert('✓ 已標記為完成閱讀!');
   render();
@@ -2296,7 +2364,7 @@ async function submitQuiz(btn, courseId){
   }
   const restore = lockBtn(btn, '送出中...');
   let mine;
-  try{ mine = await fetchOwnProgress(u.id); }catch(e){ alert('無法連線到資料庫,測驗結果尚未儲存,請確認網路連線後重新送出。'); restore(); return; }
+  try{ mine = await fetchOwnProgress(u.id); }catch(e){ dbAlert('無法連線到資料庫,測驗結果尚未儲存,請確認網路連線後重新送出。'); restore(); return; }
   if(!mine[courseId]) mine[courseId] = {watchSeconds:0, watched:false, quizPassed:false};
   const p = mine[courseId];
   const submittedAt = new Date().toISOString();
@@ -2314,7 +2382,7 @@ async function submitQuiz(btn, courseId){
   const oneYearAgo = Date.now() - 365*24*60*60*1000;
   p.quizHistory = history.filter(h=> new Date(h.submittedAt).getTime() >= oneYearAgo);
   try{ await saveStaffProgress(u.id, mine); }
-  catch(e){ alert('無法連線到資料庫,測驗結果尚未儲存,請確認網路連線後重新送出。'); restore(); return; }
+  catch(e){ dbAlert('無法連線到資料庫,測驗結果尚未儲存,請確認網路連線後重新送出。'); restore(); return; }
   STATE.progress[u.id] = mine;
   STATE.quizResult = {courseId, correct, total, score, passed, details};
   render();
@@ -2368,7 +2436,7 @@ function staffFormHtml(s){
       </select>
     </div>
     <div id="staffFormPasswordWrap" style="display:${s.role==='admin'?'':'none'};margin-bottom:10px;">
-      <input type="password" id="staffFormPassword" class="field" style="width:100%;" placeholder="${s.password? '管理員密碼(留空 = 不更動)' : '設定此管理員的專屬密碼'}">
+      <input type="password" id="staffFormPassword" class="field" style="width:100%;" placeholder="${(s.password||s.hasPassword)? '管理員密碼(留空 = 不更動;至少 6 個字元)' : '設定此管理員的密碼(至少 6 個字元)'}">
     </div>
     <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-bottom:14px;cursor:pointer;">
       <input type="checkbox" id="staffFormCanViewRoster" ${s.canViewRoster?'checked':''}>
@@ -2429,14 +2497,20 @@ async function submitNewStaff(btn){
   if(!f.name){ alert('請輸入姓名'); return; }
   if(!f.email){ if(!confirm('未填寫Email的話,任何人都能不驗證身分就切換成這個人,確定要不填嗎?')) return; }
   if(f.role==='admin' && !f.password){ alert('請為這位管理員設定專屬密碼'); return; }
+  if(f.role==='admin' && f.password.length<6){ alert('管理員密碼至少需要 6 個字元'); return; }
   const restore = lockBtn(btn, '儲存中...');
-  let latest;
-  try{ latest = await loadStaff(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
+  let caps, latest;
+  try{ caps = await ensureServerCaps(); latest = await loadStaff(); }catch(e){ dbAlert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   const newStaff = {id:uid(), name:f.name, dept:f.dept, email:f.email, role:f.role, canViewRoster:f.canViewRoster, isManager:f.isManager};
-  if(f.role==='admin') newStaff.password = f.password;
+  if(f.role==='admin' && !caps.auth) newStaff.password = f.password; // older script: kept with the record, as before
   latest.push(newStaff);
   STATE.staff = latest;
-  await saveStaff(STATE.staff);
+  try{ await saveStaff(STATE.staff); }
+  catch(e){ STATE.staff = latest.filter(x=>x.id!==newStaff.id); dbAlert('無法儲存人員,請確認網路連線與管理員登入後再試一次。'); restore(); return; }
+  if(f.role==='admin' && caps.auth){
+    try{ await setAdminPassword(newStaff.id, f.password); newStaff.hasPassword = true; }
+    catch(e){ alert('人員已新增,但管理員密碼設定失敗,請按這位人員的「編輯」重新設定密碼,否則他無法登入。'); }
+  }
   document.getElementById('addStaffFormWrap').innerHTML='';
   renderCurrentUserDisplay();
   updateNavVisibility();
@@ -2445,20 +2519,33 @@ async function submitNewStaff(btn){
 async function submitEditStaff(btn, id){
   const f = readStaffForm();
   if(!f.name){ alert('請輸入姓名'); return; }
+  if(f.password && f.password.length<6){ alert('管理員密碼至少需要 6 個字元'); return; }
   const restore = lockBtn(btn, '儲存中...');
-  let latest;
-  try{ latest = await loadStaff(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
+  let caps, latest;
+  try{ caps = await ensureServerCaps(); latest = await loadStaff(); }catch(e){ dbAlert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   const s = latest.find(x=>x.id===id);
   if(!s){ alert('找不到這位人員,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
+  const hadPassword = !!(s.password || s.hasPassword);
   s.name = f.name; s.dept = f.dept; s.email = f.email; s.role = f.role; s.canViewRoster = f.canViewRoster; s.isManager = f.isManager;
   if(f.role==='admin'){
-    if(f.password) s.password = f.password;
-    else if(!s.password){ alert('請為這位管理員設定專屬密碼'); restore(); return; }
+    if(caps.auth){
+      if(!f.password && !hadPassword){ alert('請為這位管理員設定專屬密碼'); restore(); return; }
+      delete s.password;
+    } else {
+      if(f.password) s.password = f.password;
+      else if(!s.password){ alert('請為這位管理員設定專屬密碼'); restore(); return; }
+    }
   } else {
     delete s.password;
+    delete s.hasPassword;
   }
   STATE.staff = latest;
-  await saveStaff(STATE.staff);
+  try{ await saveStaff(STATE.staff); }
+  catch(e){ dbAlert('無法儲存人員,請確認網路連線與管理員登入後再試一次。'); restore(); return; }
+  if(f.role==='admin' && caps.auth && f.password){
+    try{ await setAdminPassword(id, f.password); s.hasPassword = true; }
+    catch(e){ alert('人員資料已儲存,但管理員密碼設定失敗,請再按一次「編輯」重新設定密碼。'); }
+  }
   document.getElementById('addStaffFormWrap').innerHTML='';
   renderCurrentUserDisplay();
   updateNavVisibility();
@@ -2471,10 +2558,11 @@ async function deleteStaff(btn, id){
   if(!confirm('確定刪除此人員?學習紀錄將一併移除。')) return;
   const restore = lockBtn(btn, '刪除中...');
   let latest;
-  try{ latest = await loadStaff(); }catch(e){ alert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
+  try{ latest = await loadStaff(); }catch(e){ dbAlert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   STATE.staff = latest.filter(s=>s.id!==id);
   delete STATE.progress[id];
-  await saveStaff(STATE.staff);
+  try{ await saveStaff(STATE.staff); }
+  catch(e){ STATE.staff = latest; dbAlert('無法刪除人員,請確認網路連線與管理員登入後再試一次。'); restore(); return; }
   try{ await saveStaffProgress(id, {}); }catch(e){ console.error('清除學習紀錄失敗', e); }
   if(STATE.currentUserId===id){ STATE.currentUserId = STATE.staff[0].id; await saveCurrentUser(STATE.currentUserId); }
   renderCurrentUserDisplay();

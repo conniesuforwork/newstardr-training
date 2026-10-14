@@ -128,6 +128,8 @@
     <div class="user-box">
       <label>目前身分</label>
       <div id="currentUserDisplay" style="color:#fff;font-weight:600;margin-bottom:10px;font-size:14px;"></div>
+      <button class="btn ghost small" id="refreshBtn" style="width:100%;margin-bottom:6px;" onclick="refreshData(this)">🔄 重新載入資料</button>
+      <div id="dataFreshness" style="font-size:11px;color:#a89b8f;margin-bottom:10px;text-align:center;"></div>
       <button class="btn ghost small" style="width:100%;" onclick="showLoginGate()">切換身分</button>
     </div>
   </div>
@@ -532,6 +534,7 @@ async function initApp(skipWarning){
     STATE.progress = data.progress;
     STATE.adminPassword = data.adminPassword;
     STATE.lockingEnabled = data.lockingEnabled;
+    STATE.loadedAt = Date.now();
   }catch(e){
     console.error('資料載入失敗', e);
     showLoadErrorGate(e);
@@ -1100,6 +1103,59 @@ function render(){
   else if(STATE.view==='staff') main.innerHTML = renderStaff();
   else if(STATE.view==='reports') main.innerHTML = renderReports();
   afterRender();
+  updateFreshness();
+}
+
+/* ---------- Reload the latest data without logging out ---------- */
+function updateFreshness(){
+  const el = document.getElementById('dataFreshness');
+  if(!el) return;
+  if(!STATE.loadedAt){ el.textContent = ''; return; }
+  const d = new Date(STATE.loadedAt);
+  el.textContent = '資料更新於 ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+}
+function openFormInPage(){
+  return ['addCourseFormWrap','addStaffFormWrap'].some(id=>{
+    const el = document.getElementById(id);
+    return !!(el && el.innerHTML.trim());
+  });
+}
+// Fetches the newest courses / people / progress and redraws the current page.
+// Who is logged in (including the admin pass), the current page and the selected course are all kept.
+async function refreshData(btn){
+  if(STATE.refreshing) return;
+  // things a redraw would wipe: warn first
+  if(openFormInPage() && !confirm('目前有正在填寫的表單,重新載入會清掉還沒儲存的內容。\n\n確定要重新載入嗎?')) return;
+  if(STATE.view==='quiz' && !STATE.quizResult && Object.keys(STATE.quizAnswers||{}).length>0 && !confirm('你正在作答測驗,重新載入會清掉目前已選的答案。\n\n確定要重新載入嗎?')) return;
+  if(__playingSince!==null && !confirm('影片正在播放,重新載入後會從頭開始。\n\n確定要重新載入嗎?')) return;
+  STATE.refreshing = true;
+  const restore = lockBtn(btn, '載入中…');
+  try{
+    // make sure watch progress that is still waiting to be saved is not lost
+    await stopWatch(false);
+    if(__watchDirty && !confirm('你的觀看進度還沒有儲存成功,現在重新載入可能會遺失。\n\n仍要重新載入嗎?')) return;
+    let data;
+    try{ data = await loadInitialData(); }
+    catch(e){ dbAlert('重新載入失敗,請確認網路連線後再試一次。\n\n你的登入狀態沒有改變,可以繼續使用。'); return; }
+    if(!data.staff.length && STATE.staff.length){ dbAlert('這次讀到的資料不完整,沒有更新,畫面維持原樣。請稍後再試一次。'); return; }
+    STATE.staff = data.staff;
+    STATE.courses = data.courses;
+    STATE.progress = data.progress;
+    STATE.adminPassword = data.adminPassword;
+    STATE.lockingEnabled = data.lockingEnabled;
+    STATE.loadedAt = Date.now();
+    const me = STATE.staff.find(s=>s.id===STATE.currentUserId);
+    if(!me){ alert('你的帳號已經不在人員名單裡,請重新登入。'); showLoginGate(); return; }
+    if(me.role!=='admin'){ STATE.adminToken = ''; STATE.adminAuthed = false; } // no longer an admin: drop the pass
+    if(STATE.view==='quiz' && !STATE.quizResult) STATE.quizAnswers = {};
+    closeModal();
+    renderCurrentUserDisplay();
+    updateNavVisibility();
+    render();
+  } finally {
+    restore();
+    STATE.refreshing = false;
+  }
 }
 
 /* ---------- Dashboard ---------- */

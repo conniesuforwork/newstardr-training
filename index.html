@@ -64,10 +64,6 @@
   .stat-card .value{font-size:30px;font-weight:800;margin-top:8px;}
   .stat-card .icon{width:34px;height:34px;border-radius:8px;background:var(--accent-soft);display:flex;align-items:center;justify-content:center;color:var(--accent);font-size:16px;}
 
-  .grid4 .stat-card:nth-child(2) .icon{background:#dde5ea;color:#4f6577;}
-  .grid4 .stat-card:nth-child(3) .icon{background:#efe6d3;color:#76602c;}
-  .grid4 .stat-card:nth-child(4) .icon{background:#efdedb;color:#8a5650;}
-  .grid4 .stat-card:nth-child(5) .icon{background:#e5e0ea;color:#665f7e;}
   .section-title{font-size:16px;font-weight:700;margin:26px 0 12px;}
   table{width:100%;border-collapse:collapse;font-size:13px;}
   th{text-align:left;color:var(--sub);font-weight:600;padding:10px 12px;border-bottom:1px solid var(--border);font-size:12px;}
@@ -76,7 +72,9 @@
   .pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap;flex-shrink:0;}
   .pill.ok{background:var(--ok-soft);color:var(--ok);}
   .pill.warn{background:var(--warn-soft);color:var(--warn);}
-  .pill.off{background:var(--off-soft);color:var(--sub);}
+  .pill.off{background:var(--off-soft);color:var(--sub);box-shadow:inset 0 0 0 1px #d3dccf;}
+  .pill.part{background:#eaf1e6;color:#476650;box-shadow:inset 0 0 0 1px #c3d4bf;} /* in progress: light green */
+  .pill.admin{background:var(--accent);color:#fff;} /* administrator: deep green */
 
   .form-row{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap;}
   input[type=text],input[type=number],input[type=email],input[type=password],textarea,select.field{
@@ -1759,7 +1757,7 @@ function renderCourses(){
             </div>
             <div id="watchedPillWrap">
               ${selected.referenceOnly? '<span class="pill off">參考資料</span>' : (prog && prog.watched? '<span class="pill ok">已觀看</span>' : '<span class="pill off">尚未觀看</span>')}
-              ${(!userExempt && !selected.referenceOnly)? (prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill warn">待測驗</span>':'')) : ((userExempt && !admin && selected.quiz&&selected.quiz.length && !selected.referenceOnly)? '<span class="pill off">免測驗</span>' : '')}
+              ${(!userExempt && !selected.referenceOnly)? (prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill part">待測驗</span>':'')) : ((userExempt && !admin && selected.quiz&&selected.quiz.length && !selected.referenceOnly)? '<span class="pill off">免測驗</span>' : '')}
             </div>
           </div>
           ${selected.materials && selected.materials.length? `
@@ -1793,7 +1791,7 @@ function renderCourses(){
           const cLocked = !admin && isPublished(c) && isCourseLocked(u.id, c);
           return categoryHeaderHtml(visibleCourses, idx) + `<div class="course-item ${c.id===STATE.selectedCourseId?'selected':''}" onclick="selectCourse('${c.id}')">
             <div><h4><span style="color:var(--accent);margin-right:6px;">${idx+1}.</span>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (p&&p.watched?'已觀看':'未觀看')} ${vc>1? '· '+vc+' 支影片':''} ${c.quiz&&c.quiz.length? ((!admin && isQuizExempt(u,c))? '· 免測驗' : '· '+c.quiz.length+' 題測驗') : ''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''} ${draftBadgeHtml(c)} ${prereqBadgeHtml(c, admin)} ${courseListDate(c)}</p></div>
-            <span class="pill ${cLocked?'off':(complete?'ok':(p?'warn':'off'))}">${cLocked?'鎖定':(complete?'完成':(p?(needsQuiz(c,u)? '待測驗' : '進行中'):'未開始'))}</span>
+            <span class="pill ${cLocked?'off':(complete?'ok':(p?'part':'off'))}">${cLocked?'鎖定':(complete?'完成':(p?(needsQuiz(c,u)? '待測驗' : '進行中'):'未開始'))}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無課程</div>'}
       </div>
@@ -1844,7 +1842,7 @@ function renderDocuments(){
               ${selected.referenceOnly? '<p class="muted" style="margin-top:4px;">📌 僅供參考資料,不強制要求完成。</p>' : ''}
             </div>
             <div id="watchedPillWrap">
-              ${selected.referenceOnly? '<span class="pill off">參考資料</span>' : (!userExempt? (prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill warn">待測驗</span>':'')) : (prog&&prog.watched? '<span class="pill ok">已完成</span>':'') + ((!admin && selected.quiz&&selected.quiz.length)? '<span class="pill off">免測驗</span>':''))}
+              ${selected.referenceOnly? '<span class="pill off">參考資料</span>' : (!userExempt? (prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill part">待測驗</span>':'')) : (prog&&prog.watched? '<span class="pill ok">已完成</span>':'') + ((!admin && selected.quiz&&selected.quiz.length)? '<span class="pill off">免測驗</span>':''))}
             </div>
           </div>
           ${selected.materials && selected.materials.length? `
@@ -1876,7 +1874,7 @@ function renderDocuments(){
           const cLocked = !admin && isPublished(c) && isCourseLocked(u.id, c);
           return categoryHeaderHtml(visibleDocs, idx) + `<div class="course-item ${c.id===STATE.selectedCourseId?'selected':''}" onclick="selectCourse('${c.id}')">
             <div><h4><span style="color:var(--accent);margin-right:6px;">${idx+1}.</span>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (c.materials&&c.materials.length? c.materials.length+' 份文件':'')} ${c.quiz&&c.quiz.length? ((!admin && isQuizExempt(u,c))? '· 免測驗' : '· '+c.quiz.length+' 題測驗') : ''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''} ${draftBadgeHtml(c)} ${prereqBadgeHtml(c, admin)} ${courseListDate(c)}</p></div>
-            <span class="pill ${cLocked?'off':(complete?'ok':(p?'warn':'off'))}">${cLocked?'鎖定':(complete?'完成':(p?(needsQuiz(c,u)? '待測驗' : '進行中'):'未開始'))}</span>
+            <span class="pill ${cLocked?'off':(complete?'ok':(p?'part':'off'))}">${cLocked?'鎖定':(complete?'完成':(p?(needsQuiz(c,u)? '待測驗' : '進行中'):'未開始'))}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無文件資料</div>'}
       </div>
@@ -2447,7 +2445,7 @@ function accrueWatch(forceWatched){
         const course = STATE.courses.find(c=>c.id===cid);
         pillWrap.innerHTML = `
           <span class="pill ok">已觀看</span>
-          ${p.quizPassed? '<span class="pill ok">測驗通過</span>' : (course && course.quiz && course.quiz.length? '<span class="pill warn">待測驗</span>':'')}
+          ${p.quizPassed? '<span class="pill ok">測驗通過</span>' : (course && course.quiz && course.quiz.length? '<span class="pill part">待測驗</span>':'')}
         `;
       }
     }
@@ -2676,9 +2674,9 @@ function renderStaff(){
             <td>${escapeHtml(s.name)} ${s.isManager? '<span class="pill ok">主管</span>':''}</td>
             <td>${escapeHtml(s.dept||'-')}</td>
             <td>${escapeHtml(s.email||'-')}</td>
-            <td><span class="pill ${s.role==='admin'?'warn':'off'}">${s.role==='admin'?'管理員':'一般人員'}</span></td>
+            <td><span class="pill ${s.role==='admin'?'admin':'off'}">${s.role==='admin'?'管理員':'一般人員'}</span></td>
             <td class="muted">${fmtTime(lastLogin)}</td>
-            <td><span class="pill ${pct>=100?'ok':(pct>0?'warn':'off')}">${pct}%</span></td>
+            <td><span class="pill ${pct>=100?'ok':(pct>0?'part':'off')}">${pct}%</span></td>
             <td><button class="icon-btn" onclick="showEditStaffForm('${s.id}')">編輯</button> <button class="icon-btn" onclick="deleteStaff(this,'${s.id}')">刪除</button></td>
           </tr>`;
         }).join('')}
@@ -2860,7 +2858,7 @@ function renderReports(){
           return `<tr>
             <td>${escapeHtml(s.name)}</td>
             <td>${escapeHtml(s.dept||'-')}</td>
-            <td><span class="pill ${pct>=100?'ok':(pct>0?'warn':'off')}">${pct}%</span></td>
+            <td><span class="pill ${pct>=100?'ok':(pct>0?'part':'off')}">${pct}%</span></td>
             <td>${mins} 分 ${secs} 秒</td>
             <td>${avgScore===null? '<span class="muted">尚未測驗</span>' : avgScore+'分'}</td>
           </tr>`;

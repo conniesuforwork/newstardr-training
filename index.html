@@ -70,11 +70,12 @@
   td{padding:12px;border-bottom:1px solid var(--border);}
   tr:last-child td{border-bottom:none;}
   .pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap;flex-shrink:0;}
-  .pill.ok{background:var(--ok-soft);color:var(--ok);}
+  .pill.ok{background:#4f7d5f;color:#fff;} /* done / passed: deep green */
+  .pill.tag{background:var(--ok-soft);color:var(--ok);} /* plain label such as 主管 (not a status) */
   .pill.warn{background:var(--warn-soft);color:var(--warn);}
   .pill.off{background:var(--off-soft);color:var(--sub);box-shadow:inset 0 0 0 1px #d3dccf;}
   .pill.part{background:#eaf1e6;color:#476650;box-shadow:inset 0 0 0 1px #c3d4bf;} /* in progress: light green */
-  .pill.admin{background:var(--accent);color:#fff;} /* administrator: deep green */
+  .pill.admin{background:#44574b;color:#fff;} /* administrator: dark grey-green, different from "done" */
 
   .form-row{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap;}
   input[type=text],input[type=number],input[type=email],input[type=password],textarea,select.field{
@@ -2671,7 +2672,7 @@ function renderStaff(){
           const pct = total? Math.round(done/total*100):0;
           const lastLogin = userProgress(s.id)._lastLogin;
           return `<tr ${s.isManager? 'style="background:var(--accent-soft);"':''}>
-            <td>${escapeHtml(s.name)} ${s.isManager? '<span class="pill ok">主管</span>':''}</td>
+            <td>${escapeHtml(s.name)} ${s.isManager? '<span class="pill tag">主管</span>':''}</td>
             <td>${escapeHtml(s.dept||'-')}</td>
             <td>${escapeHtml(s.email||'-')}</td>
             <td><span class="pill ${s.role==='admin'?'admin':'off'}">${s.role==='admin'?'管理員':'一般人員'}</span></td>

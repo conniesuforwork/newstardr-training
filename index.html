@@ -969,18 +969,25 @@ function staffForCourse(course){
 }
 function courseRosterTableHtml(course, watchedLabel){
   const roster = sortedStaff(staffForCourse(course));
+  const canMark = isAdmin();
   return `
     <div class="card" style="margin-top:20px;">
       <div class="section-title" style="margin-top:0;">課程名單:${escapeHtml(course.title)}</div>
+      ${canMark? `
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;">
+          <button class="btn accent small" onclick="rosterMark(this,'${course.id}','mark')">✔ 把勾選的人標記為已${watchedLabel}</button>
+          <button class="btn ghost small" onclick="rosterMark(this,'${course.id}','unmark')">↩ 取消勾選者的補記</button>
+          <span class="muted" style="font-size:12px;">同仁明明看過卻顯示未${watchedLabel}時使用。補記會註明是管理員補記,同仁也看得到。</span>
+        </div>` : ''}
       <table>
-        <thead><tr><th>姓名</th><th>部門</th><th>${watchedLabel}</th><th>${watchedLabel}時間</th><th>測驗狀態</th><th>測驗時間</th><th>完成</th></tr></thead>
+        <thead><tr>${canMark? '<th style="width:34px;"><input type="checkbox" onchange="rosterToggleAll(this.checked)" title="全選尚未'+watchedLabel+'的人"></th>' : ''}<th>姓名</th><th>部門</th><th>${watchedLabel}</th><th>${watchedLabel}時間</th><th>測驗狀態</th><th>測驗時間</th><th>完成</th></tr></thead>
         <tbody>
           ${roster.map(s=>{
             const p = userProgress(s.id)[course.id];
             const exempt = isQuizExempt(s, course);
             let quizStatus;
             if(!course.quiz || !course.quiz.length) quizStatus = '<span class="muted">無測驗</span>';
-            else if(exempt) quizStatus = '<span class="pill off">已豁免</span>';
+            else if(exempt) quizStatus = (p && typeof p.quizScore==='number')? `<span class="pill off">已豁免(自願測驗 ${p.quizScore} 分)</span>` : '<span class="pill off">已豁免</span>';
             else if(p && p.quizPassed) quizStatus = `<span class="pill ok">已通過(${p.quizScore}分)</span>`;
             else if(p && typeof p.quizScore==='number') quizStatus = `<span class="pill warn">未通過(${p.quizScore}分)</span>`;
             else quizStatus = '<span class="pill off">未測驗</span>';
@@ -988,20 +995,78 @@ function courseRosterTableHtml(course, watchedLabel){
               quizStatus += ` <button class="icon-btn" onclick="showQuizDetailModal('${s.id}','${course.id}')">查看詳情</button>`;
             }
             const complete = isCourseComplete(s.id, course.id);
+            const watched = !!(p && p.watched);
+            const marked = !!(p && p.adminMarkedAt);
             return `<tr>
+              ${canMark? `<td><input type="checkbox" class="rosterPick" value="${s.id}" data-watched="${watched?1:0}"></td>` : ''}
               <td>${escapeHtml(s.name)}</td>
               <td>${escapeHtml(s.dept||'-')}</td>
-              <td>${p&&p.watched? '<span class="pill ok">已'+watchedLabel+'</span>':'<span class="pill off">未'+watchedLabel+'</span>'}</td>
-              <td class="muted">${fmtTime(p&&p.lastWatchedAt)}</td>
+              <td>${watched? '<span class="pill ok">已'+watchedLabel+'</span>'+(marked? ' <span class="muted" style="font-size:11px;">管理員補記</span>':'') : '<span class="pill off">未'+watchedLabel+'</span>'}</td>
+              <td class="muted">${marked? '補記 '+fmtTime(p.adminMarkedAt) : fmtTime(p&&p.lastWatchedAt)}</td>
               <td>${quizStatus}</td>
               <td class="muted">${fmtTime(p&&p.quizSubmittedAt)}</td>
               <td><span class="pill ${complete?'ok':'off'}">${complete?'完成':'未完成'}</span></td>
             </tr>`;
-          }).join('') || `<tr><td colspan="7" class="empty">目前沒有人被指派這堂課</td></tr>`}
+          }).join('') || `<tr><td colspan="${canMark?8:7}" class="empty">目前沒有人被指派這堂課</td></tr>`}
         </tbody>
       </table>
     </div>
   `;
+}
+function rosterToggleAll(checked){
+  document.querySelectorAll('.rosterPick').forEach(b=>{ b.checked = checked && b.dataset.watched!=='1'; });
+}
+// Admin: mark people as "watched" (or take that back). Quiz results are never touched.
+async function rosterMark(btn, courseId, mode){
+  if(!isAdmin()) return;
+  const course = STATE.courses.find(c=>c.id===courseId);
+  if(!course) return;
+  const label = courseTab(course)==='course'? '觀看' : '閱讀';
+  const ids = Array.from(document.querySelectorAll('.rosterPick:checked')).map(b=>b.value);
+  if(!ids.length){ alert('請先勾選要處理的人員。'); return; }
+  const targets = ids.filter(id=>{
+    const p = userProgress(id)[courseId] || {};
+    return mode==='mark'? !p.watched : !!p.adminMarkedAt;
+  });
+  const skipped = ids.length - targets.length;
+  if(!targets.length){
+    alert(mode==='mark'? '勾選的人都已經是「已'+label+'」,不需要補記。' : '勾選的人沒有「管理員補記」的紀錄可以取消。');
+    return;
+  }
+  const who = targets.map(staffNameById).join('、');
+  const ask = mode==='mark'
+    ? '要把以下 '+targets.length+' 位同仁,在「'+course.title+'」標記為「已'+label+'」嗎?\n\n'+who+'\n\n補記後會註明是管理員補記。測驗結果不會被改動。'
+    : '要取消以下 '+targets.length+' 位同仁的管理員補記嗎?\n\n'+who+'\n\n(如果他自己的累計'+label+'時間已滿 20 秒,仍會保留為已'+label+')';
+  if(!confirm(ask)) return;
+  const restore = lockBtn(btn, '處理中…');
+  await stopWatch(false); // anything the admin is watching is saved first
+  const failed = [];
+  let done = 0;
+  const adminName = (currentUser() && currentUser().name) || '管理員';
+  for(const id of targets){
+    try{
+      const mine = await fetchOwnProgress(id);
+      const p = mine[courseId] || (mine[courseId] = {watchSeconds:0, watched:false, quizPassed:false});
+      if(mode==='mark'){
+        p.watched = true;
+        p.adminMarkedAt = new Date().toISOString();
+        p.adminMarkedBy = adminName;
+      } else {
+        delete p.adminMarkedAt; delete p.adminMarkedBy;
+        p.watched = (p.watchSeconds||0) >= 20;
+      }
+      await saveStaffProgress(id, mine);
+      STATE.progress[id] = mine;
+      done++;
+    }catch(e){ failed.push(staffNameById(id)); }
+  }
+  restore();
+  render();
+  let msg = (mode==='mark'? '已為 ' : '已取消 ') + done + ' 位同仁' + (mode==='mark'? '標記為已'+label : '的補記') + '。';
+  if(skipped) msg += '\n(另有 '+skipped+' 位不需要處理,已略過)';
+  if(failed.length) msg += '\n\n⚠ 這些人處理失敗,請稍後再試:'+failed.join('、');
+  if(mode==='mark' && done) msg += '\n\n如果同仁此刻正開著網站,請他按左下角「🔄 重新載入資料」,否則他自己的畫面可能會把這個標記蓋回去。';
+  alert(msg);
 }
 const PREFERRED_CATEGORY_ORDER = ['手術','美療','護理','拍照教學','行政'];
 // Category = the explicit "分類" field if set, otherwise the part of the title before "-" (e.g. "手術-天鵝頸" -> 手術).
@@ -1159,6 +1224,57 @@ async function refreshData(btn){
 }
 
 /* ---------- Dashboard ---------- */
+/* ---------- When was it added ---------- */
+// New items store createdAt. Items added before this existed carry their creation time inside their id
+// (ids start with the time they were made, in base 36), so they can still show it.
+function courseCreatedAt(c){
+  if(!c) return null;
+  if(c.createdAt){ const d = new Date(c.createdAt); if(!isNaN(d.getTime())) return d; }
+  const m = String(c.id||'').match(/^[0-9a-z]{8}/);
+  if(m){
+    const t = parseInt(m[0], 36);
+    if(t > 1.5e12 && t < Date.now() + 86400000) return new Date(t);
+  }
+  return null;
+}
+function fmtDateTimeFull(d){
+  const p = n => String(n).padStart(2,'0');
+  return d.getFullYear()+'/'+p(d.getMonth()+1)+'/'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());
+}
+function courseTimeInfoHtml(c){
+  const created = courseCreatedAt(c);
+  if(!created) return '';
+  let s = '🕒 新增於 ' + fmtDateTimeFull(created);
+  if(c.publishedAt){
+    const p = new Date(c.publishedAt);
+    if(!isNaN(p.getTime()) && Math.abs(p - created) > 60000) s += ' · 發布於 ' + fmtDateTimeFull(p);
+  }
+  return `<p class="muted" style="margin-top:4px;">${s}</p>`;
+}
+function courseListDate(c){
+  const d = courseCreatedAt(c);
+  if(!d) return '';
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return '· 新增 ' + (sameYear? '' : d.getFullYear()+'/') + (d.getMonth()+1) + '/' + d.getDate();
+}
+
+/* ---------- Exempt from the quiz: clearly visible, and the quiz stays available as an option ---------- */
+function needsQuiz(c, staffObj){ return !!(c && c.quiz && c.quiz.length) && !isQuizExempt(staffObj, c); }
+function exemptNoticeHtml(c, prog, userExempt, admin){
+  if(admin || !userExempt || !(c && c.quiz && c.quiz.length)) return '';
+  const took = prog && typeof prog.quizScore==='number';
+  return `<div style="background:var(--accent-soft);border-radius:10px;padding:10px 14px;margin:10px 0;font-size:13px;line-height:1.7;">
+    ✅ <b>您不需要測驗</b>:只要${courseTab(c)==='course'?'看完影片':'閱讀完成'}就算完成。想自己測驗看看也可以,<b>完全自願,成績不影響完成狀態</b>。
+    ${took? `<div class="muted" style="margin-top:4px;">你自願測驗過:${prog.quizScore} 分(${fmtTime(prog.quizSubmittedAt)})</div>` : ''}
+    <div style="margin-top:8px;"><button class="btn ghost small" onclick="goToQuiz('${c.id}')">自願測驗 →</button></div>
+  </div>`;
+}
+function adminMarkNoteHtml(prog, label){
+  if(!prog || !prog.adminMarkedAt) return '';
+  return `<p class="muted" style="margin-top:4px;">📝 管理員已於 ${fmtTime(prog.adminMarkedAt)} 協助標記為已${label}。</p>`;
+}
+function staffNameById(id){ const s = STATE.staff.find(x=>x.id===id); return s? s.name : id; }
+
 function listHeaderHtml(title, list, u, admin){
   const total = list.length;
   const required = list.filter(c=>!c.referenceOnly);
@@ -1238,6 +1354,7 @@ async function togglePublish(btn, id){
   try{ c = await loadCourse(id); }catch(e){ dbAlert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   if(!c || c.deleted){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
   c.published = willPublish;
+  if(willPublish) c.publishedAt = new Date().toISOString();
   try{ await saveCourse(c); }
   catch(e){ dbAlert('無法連線到資料庫,尚未儲存,請確認網路連線後再試一次。'); restore(); return; }
   const pi = STATE.courses.findIndex(x=>x.id===id);
@@ -1504,7 +1621,7 @@ function renderDashboard(){
       const p = userProgress(s.id)[c.id];
       if(isCourseComplete(s.id, c.id)){
         totalCompleted++;
-      } else if(p){
+      } else if(p && needsQuiz(c, s)){
         pendingQuiz++;
         (pendingQuizByCourse[c.id] = pendingQuizByCourse[c.id] || {title:c.title, names:[]}).names.push(s.name);
       } else {
@@ -1566,8 +1683,8 @@ function renderDashboard(){
         pendingList.map(g=>`<div style="margin-bottom:10px;"><div style="font-weight:600;font-size:13px;margin-bottom:4px;">${escapeHtml(g.title)}</div><div class="muted">${g.names.map(escapeHtml).join('、')}</div></div>`).join('')}
     </div>
     <div class="card">
-      <div class="section-title" style="margin-top:0;">尚未開始名單</div>
-      ${notStartedList.length===0? '<div class="empty">目前所有人都已開始上課。</div>' :
+      <div class="section-title" style="margin-top:0;">尚未完成名單(還沒開始,或只差看完)</div>
+      ${notStartedList.length===0? '<div class="empty">目前沒有人在這個階段。</div>' :
         notStartedList.map(g=>`<div style="margin-bottom:10px;"><div style="font-weight:600;font-size:13px;margin-bottom:4px;">${escapeHtml(g.title)}</div><div class="muted">${g.names.map(escapeHtml).join('、')}</div></div>`).join('')}
     </div>
   </div>
@@ -1619,15 +1736,17 @@ function renderCourses(){
             <div>
               <h3 style="margin:0 0 6px;">${selected.pinned?'⭐ ':''}${escapeHtml(selected.title)}</h3>
               <p class="muted" style="max-width:520px;">${escapeHtml(selected.desc||'')}</p>
+              ${courseTimeInfoHtml(selected)}
+              ${adminMarkNoteHtml(prog, courseTab(selected)==='course'?'觀看':'閱讀')}
               ${selected.targetDepts && selected.targetDepts.length? `<p class="muted" style="margin-top:6px;">適用部門:${selected.targetDepts.map(escapeHtml).join('、')}</p>` : ''}
               ${selected.targetStaffIds && selected.targetStaffIds.length? `<p class="muted" style="margin-top:4px;">適用人員:${selected.targetStaffIds.map(id=>{const s=STATE.staff.find(x=>x.id===id); return s? escapeHtml(s.name): '';}).filter(Boolean).join('、')}</p>` : ''}
               ${prereqCourses.length? `<p class="muted" style="margin-top:4px;">🔗 前置課程:${prereqCourses.map(p=>escapeHtml(p.title)).join('、')}</p>` : ''}
-              ${userExempt? '<p class="muted" style="margin-top:4px;">您已豁免此堂課測驗,看完影片即算完成。</p>' : ''}
+              ${exemptNoticeHtml(selected, prog, userExempt, admin)}
               ${selected.referenceOnly? '<p class="muted" style="margin-top:4px;">📌 僅供參考資料,不強制要求完成。</p>' : ''}
             </div>
             <div id="watchedPillWrap">
               ${selected.referenceOnly? '<span class="pill off">參考資料</span>' : (prog && prog.watched? '<span class="pill ok">已觀看</span>' : '<span class="pill off">尚未觀看</span>')}
-              ${(!userExempt && !selected.referenceOnly)? (prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill warn">待測驗</span>':'')) : ''}
+              ${(!userExempt && !selected.referenceOnly)? (prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill warn">待測驗</span>':'')) : ((userExempt && !admin && selected.quiz&&selected.quiz.length && !selected.referenceOnly)? '<span class="pill off">免測驗</span>' : '')}
             </div>
           </div>
           ${selected.materials && selected.materials.length? `
@@ -1660,8 +1779,8 @@ function renderCourses(){
           const vc = courseVideos(c).length;
           const cLocked = !admin && isPublished(c) && isCourseLocked(u.id, c);
           return categoryHeaderHtml(visibleCourses, idx) + `<div class="course-item ${c.id===STATE.selectedCourseId?'selected':''}" onclick="selectCourse('${c.id}')">
-            <div><h4><span style="color:var(--accent);margin-right:6px;">${idx+1}.</span>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (p&&p.watched?'已觀看':'未觀看')} ${vc>1? '· '+vc+' 支影片':''} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''} ${draftBadgeHtml(c)} ${prereqBadgeHtml(c, admin)}</p></div>
-            <span class="pill ${cLocked?'off':(complete?'ok':(p?'warn':'off'))}">${cLocked?'鎖定':(complete?'完成':(p?'待測驗':'未開始'))}</span>
+            <div><h4><span style="color:var(--accent);margin-right:6px;">${idx+1}.</span>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (p&&p.watched?'已觀看':'未觀看')} ${vc>1? '· '+vc+' 支影片':''} ${c.quiz&&c.quiz.length? ((!admin && isQuizExempt(u,c))? '· 免測驗' : '· '+c.quiz.length+' 題測驗') : ''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''} ${draftBadgeHtml(c)} ${prereqBadgeHtml(c, admin)} ${courseListDate(c)}</p></div>
+            <span class="pill ${cLocked?'off':(complete?'ok':(p?'warn':'off'))}">${cLocked?'鎖定':(complete?'完成':(p?(needsQuiz(c,u)? '待測驗' : '進行中'):'未開始'))}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無課程</div>'}
       </div>
@@ -1703,14 +1822,16 @@ function renderDocuments(){
             <div>
               <h3 style="margin:0 0 6px;">${selected.pinned?'⭐ ':''}${escapeHtml(selected.title)}</h3>
               <p class="muted" style="max-width:520px;">${escapeHtml(selected.desc||'')}</p>
+              ${courseTimeInfoHtml(selected)}
+              ${adminMarkNoteHtml(prog, courseTab(selected)==='course'?'觀看':'閱讀')}
               ${selected.targetDepts && selected.targetDepts.length? `<p class="muted" style="margin-top:6px;">適用部門:${selected.targetDepts.map(escapeHtml).join('、')}</p>` : ''}
               ${selected.targetStaffIds && selected.targetStaffIds.length? `<p class="muted" style="margin-top:4px;">適用人員:${selected.targetStaffIds.map(id=>{const s=STATE.staff.find(x=>x.id===id); return s? escapeHtml(s.name): '';}).filter(Boolean).join('、')}</p>` : ''}
               ${prereqCourses.length? `<p class="muted" style="margin-top:4px;">🔗 前置課程:${prereqCourses.map(p=>escapeHtml(p.title)).join('、')}</p>` : ''}
-              ${userExempt? '<p class="muted" style="margin-top:4px;">您已豁免此份資料測驗,看完文件即算完成。</p>' : ''}
+              ${exemptNoticeHtml(selected, prog, userExempt, admin)}
               ${selected.referenceOnly? '<p class="muted" style="margin-top:4px;">📌 僅供參考資料,不強制要求完成。</p>' : ''}
             </div>
             <div id="watchedPillWrap">
-              ${selected.referenceOnly? '<span class="pill off">參考資料</span>' : (!userExempt? (prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill warn">待測驗</span>':'')) : (prog&&prog.watched? '<span class="pill ok">已完成</span>':''))}
+              ${selected.referenceOnly? '<span class="pill off">參考資料</span>' : (!userExempt? (prog && prog.quizPassed? '<span class="pill ok">測驗通過</span>' : (selected.quiz&&selected.quiz.length? '<span class="pill warn">待測驗</span>':'')) : (prog&&prog.watched? '<span class="pill ok">已完成</span>':'') + ((!admin && selected.quiz&&selected.quiz.length)? '<span class="pill off">免測驗</span>':''))}
             </div>
           </div>
           ${selected.materials && selected.materials.length? `
@@ -1741,8 +1862,8 @@ function renderDocuments(){
           const complete = isCourseComplete(u.id, c.id);
           const cLocked = !admin && isPublished(c) && isCourseLocked(u.id, c);
           return categoryHeaderHtml(visibleDocs, idx) + `<div class="course-item ${c.id===STATE.selectedCourseId?'selected':''}" onclick="selectCourse('${c.id}')">
-            <div><h4><span style="color:var(--accent);margin-right:6px;">${idx+1}.</span>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (c.materials&&c.materials.length? c.materials.length+' 份文件':'')} ${c.quiz&&c.quiz.length? '· '+c.quiz.length+' 題測驗':''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''} ${draftBadgeHtml(c)} ${prereqBadgeHtml(c, admin)}</p></div>
-            <span class="pill ${cLocked?'off':(complete?'ok':(p?'warn':'off'))}">${cLocked?'鎖定':(complete?'完成':(p?'待測驗':'未開始'))}</span>
+            <div><h4><span style="color:var(--accent);margin-right:6px;">${idx+1}.</span>${cLocked?'🔒 ':''}${c.pinned?'⭐ ':''}${escapeHtml(c.title)}</h4><p>${cLocked? '尚未解鎖' : (c.materials&&c.materials.length? c.materials.length+' 份文件':'')} ${c.quiz&&c.quiz.length? ((!admin && isQuizExempt(u,c))? '· 免測驗' : '· '+c.quiz.length+' 題測驗') : ''} ${(admin && !(c.notifyEmails&&c.notifyEmails.trim()))? '· <span style="color:var(--warn);">尚未設定通知主管</span>':''} ${draftBadgeHtml(c)} ${prereqBadgeHtml(c, admin)} ${courseListDate(c)}</p></div>
+            <span class="pill ${cLocked?'off':(complete?'ok':(p?'warn':'off'))}">${cLocked?'鎖定':(complete?'完成':(p?(needsQuiz(c,u)? '待測驗' : '進行中'):'未開始'))}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無文件資料</div>'}
       </div>
@@ -2123,7 +2244,8 @@ async function submitNewCourse(btn){
   if(!f.title){ alert(__courseFormRequireVideo? '請填寫課程名稱' : '請填寫文件資料名稱'); return; }
   if(!checkBeforeSave(f, false)) return;
   const restore = lockBtn(btn, '儲存中...');
-  const course = {id:uid(), published: f.status==='published', kind: __courseFormRequireVideo? 'course':'doc', title:f.title, desc:f.desc, category:f.category, referenceOnly:f.referenceOnly, prerequisiteIds:f.prerequisiteIds, notifyEmails:f.notifyEmails, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts, targetStaffIds:f.targetStaffIds, quizExemptDepts:f.quizExemptDepts, quizExemptStaffIds:f.quizExemptStaffIds, lockExemptDepts:f.lockExemptDepts, lockExemptStaffIds:f.lockExemptStaffIds};
+  const nowIso = new Date().toISOString();
+  const course = {id:uid(), createdAt: nowIso, publishedAt: (f.status==='published')? nowIso : undefined, published: f.status==='published', kind: __courseFormRequireVideo? 'course':'doc', title:f.title, desc:f.desc, category:f.category, referenceOnly:f.referenceOnly, prerequisiteIds:f.prerequisiteIds, notifyEmails:f.notifyEmails, videos:f.videos, videoUrl:f.videos[0]? f.videos[0].url:'', quiz:f.quiz, materials:f.materials, targetDepts:f.targetDepts, targetStaffIds:f.targetStaffIds, quizExemptDepts:f.quizExemptDepts, quizExemptStaffIds:f.quizExemptStaffIds, lockExemptDepts:f.lockExemptDepts, lockExemptStaffIds:f.lockExemptStaffIds};
   try{ await saveCourse(course); }
   catch(e){ dbAlert('無法連線到資料庫,這堂課尚未儲存,請確認網路連線後再試一次。'); restore(); return; }
   try{
@@ -2146,7 +2268,7 @@ async function submitEditCourse(btn, id){
   try{ c = await loadCourse(id); }catch(e){ dbAlert('無法連線到資料庫,請確認網路連線後再試一次。'); restore(); return; }
   if(!c || c.deleted){ alert('找不到這筆資料,可能已被其他人刪除,請重新整理頁面。'); restore(); return; }
   const wasPubBefore = isPublished(c);
-  c.published = (f.status==='published'); if(!c.kind) c.kind = __courseFormRequireVideo? 'course':'doc';
+  c.published = (f.status==='published'); if(c.published && !wasPubBefore) c.publishedAt = new Date().toISOString(); if(!c.kind) c.kind = __courseFormRequireVideo? 'course':'doc';
   c.title = f.title; c.desc = f.desc; c.category = f.category; c.referenceOnly = f.referenceOnly; c.prerequisiteIds = f.prerequisiteIds; c.notifyEmails = f.notifyEmails;
   if(__courseFormRequireVideo){ c.videos = f.videos; c.videoUrl = f.videos[0]? f.videos[0].url:''; }
   c.quiz = f.quiz; c.materials = f.materials; c.targetDepts = f.targetDepts; c.targetStaffIds = f.targetStaffIds;
@@ -2404,7 +2526,7 @@ function renderQuiz(){
   const u = currentUser();
   const admin = isAdmin();
   const scopedCourses = visibleCoursesFor(u, admin);
-  const withQuiz = scopedCourses.filter(c=>c.quiz && c.quiz.length && (admin || (!isQuizExempt(u, c) && !isCourseLocked(u.id, c))));
+  const withQuiz = scopedCourses.filter(c=>c.quiz && c.quiz.length && (admin || !isCourseLocked(u.id, c)));
   const selected = withQuiz.find(c=>c.id===STATE.selectedCourseId) || withQuiz[0];
 
   return `
@@ -2418,9 +2540,10 @@ function renderQuiz(){
       <div class="course-list">
         ${withQuiz.map(c=>{
           const p = userProgress(u.id)[c.id];
+          const optional = !admin && isQuizExempt(u, c);
           return `<div class="course-item ${selected&&c.id===selected.id?'selected':''}" onclick="selectQuizCourse('${c.id}')">
-            <div><h4>${isPublished(c)? '' : '📝 '}${escapeHtml(c.title)}</h4><p>${c.quiz.length} 題${isPublished(c)? '' : ' · 草稿(試做不記錄)'}</p></div>
-            <span class="pill ${p&&p.quizPassed?'ok':'off'}">${p&&p.quizPassed?'已通過 '+p.quizScore+'%':'未測驗'}</span>
+            <div><h4>${isPublished(c)? '' : '📝 '}${escapeHtml(c.title)}</h4><p>${c.quiz.length} 題${optional? ' · 免測驗,可自願參加' : ''}${isPublished(c)? '' : ' · 草稿(試做不記錄)'}</p></div>
+            <span class="pill ${optional? 'off' : (p&&p.quizPassed?'ok':'off')}">${optional? ((p && typeof p.quizScore==='number')? '自願 '+p.quizScore+'%' : '免測驗') : (p&&p.quizPassed?'已通過 '+p.quizScore+'%':'未測驗')}</span>
           </div>`;
         }).join('') || '<div class="empty">尚無測驗</div>'}
       </div>
@@ -2441,7 +2564,7 @@ function renderQuizBody(course, u){
     const r = STATE.quizResult;
     return `
     <div class="card">
-      <div class="result-banner ${r.passed?'pass':'fail'}">${r.passed? '✓ 測驗通過':'✗ 未達通過標準'} — 得分 ${r.score}%(答對 ${r.correct}/${r.total} 題)${r.preview? ' ・草稿試做,成績不會被記錄':''}</div>
+      <div class="result-banner ${r.passed?'pass':'fail'}">${r.passed? '✓ 測驗通過':'✗ 未達通過標準'} — 得分 ${r.score}%(答對 ${r.correct}/${r.total} 題)${r.preview? ' ・草稿試做,成績不會被記錄':''}${r.optional? ' ・自願測驗,成績不影響完成狀態':''}</div>
       ${r.details.map((d,i)=>questionReviewHtml(d,i)).join('')}
       <button class="btn ghost small" onclick="STATE.quizResult=null;STATE.quizAnswers={};render();">重新測驗</button>
     </div>`;
@@ -2452,6 +2575,7 @@ function renderQuizBody(course, u){
       <h3 style="margin-top:0;">${escapeHtml(course.title)} — 測驗</h3>
       ${isAdmin()? `<button class="btn ghost small" onclick="goToCourseEdit('${course.id}')">編輯此測驗</button>` : ''}
     </div>
+    ${(!isAdmin() && isQuizExempt(u, course))? '<div class="muted" style="margin-bottom:10px;line-height:1.7;">✅ 您已<b>免測驗</b>,這份測驗是<b>自願參加</b>,成績不影響完成狀態。</div>' : ''}
     ${course.quiz.map((q,i)=>`
       <div class="quiz-q">
         <div style="font-weight:600;margin-bottom:6px;">${i+1}. ${escapeHtml(q.q)}${q.multi? ' <span class="pill warn" style="margin-left:6px;">複選題</span>':''}</div>
@@ -2482,6 +2606,7 @@ async function submitQuiz(btn, courseId){
   const total = course.quiz.length;
   const score = Math.round(correct/total*100);
   const passed = score >= 70;
+  const optional = !isAdmin() && isQuizExempt(u, course);
   if(!isPublished(course)){
     // draft: let the manager try it out and see the result, but record nothing
     STATE.quizResult = {courseId, correct, total, score, passed, details, preview:true};
@@ -2510,7 +2635,7 @@ async function submitQuiz(btn, courseId){
   try{ await saveStaffProgress(u.id, mine); }
   catch(e){ dbAlert('無法連線到資料庫,測驗結果尚未儲存,請確認網路連線後重新送出。'); restore(); return; }
   STATE.progress[u.id] = mine;
-  STATE.quizResult = {courseId, correct, total, score, passed, details};
+  STATE.quizResult = {courseId, correct, total, score, passed, details, optional};
   render();
 }
 

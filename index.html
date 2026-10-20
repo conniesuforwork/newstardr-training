@@ -141,7 +141,8 @@
       <label>目前身分</label>
       <div id="currentUserDisplay" style="color:#fff;font-weight:600;margin-bottom:10px;font-size:14px;"></div>
       <button class="btn ghost small" id="refreshBtn" style="width:100%;margin-bottom:6px;" onclick="refreshData(this)">🔄 重新載入資料</button>
-      <div id="dataFreshness" style="font-size:11px;color:#c8d4cb;margin-bottom:10px;text-align:center;"></div>
+      <div id="dataFreshness" style="font-size:11px;color:#c8d4cb;margin-bottom:2px;text-align:center;"></div>
+      <div id="appVersion" style="font-size:10px;color:#c8d4cb;opacity:.8;margin-bottom:10px;text-align:center;"></div>
       <button class="btn ghost small" style="width:100%;" onclick="showLoginGate()">切換身分</button>
     </div>
   </div>
@@ -163,6 +164,8 @@ function storageSet(key, value){
 }
 
 /* Shared backend: Google Apps Script + Google Sheet */
+// Shown on the login screen and in the sidebar, so it is easy to tell which build is actually live.
+const APP_VERSION = '2026.10.19-E 更新時間含日期';
 const API_URL = 'https://script.google.com/macros/s/AKfycbzECIWlnmrXBzrZUNwLVyxF7geQMGJK-QddoeWCzd5WtEDMdixD3sKhKKKYT2owa5LJcQ/exec';
 let __jsonpCounter = 0;
 function jsonpRequest(params, ms){
@@ -705,6 +708,7 @@ function renderLoginGateContent(){
       <div id="loginPasswordWrap"></div>
       <div id="loginError" class="login-error" style="display:none;"></div>
       <button class="btn accent" style="width:100%;margin-top:16px;" onclick="attemptLogin()">登入</button>
+      <div style="margin-top:14px;font-size:11px;color:var(--sub);">網站版本 ${APP_VERSION}</div>
     </div>
   `;
   document.getElementById('loginDeptSelect').onchange = ()=>{ updateLoginCategoryOptions(); updateLoginUserOptions(); updateLoginFieldsVisibility(); };
@@ -1185,11 +1189,13 @@ function render(){
 
 /* ---------- Reload the latest data without logging out ---------- */
 function updateFreshness(){
+  const ver = document.getElementById('appVersion');
+  if(ver) ver.textContent = '網站版本 ' + APP_VERSION;
   const el = document.getElementById('dataFreshness');
   if(!el) return;
   if(!STATE.loadedAt){ el.textContent = ''; return; }
-  const d = new Date(STATE.loadedAt);
-  el.textContent = '資料更新於 ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+  // same "month/day hour:minute" style used for last login, quiz time, etc.
+  el.textContent = '資料更新於 ' + fmtTime(new Date(STATE.loadedAt).toISOString());
 }
 function openFormInPage(){
   return ['addCourseFormWrap','addStaffFormWrap'].some(id=>{

@@ -69,6 +69,7 @@
   th{text-align:left;color:var(--sub);font-weight:600;padding:10px 12px;border-bottom:1px solid var(--border);font-size:12px;}
   td{padding:12px;border-bottom:1px solid var(--border);}
   tr:last-child td{border-bottom:none;}
+  td.muted{white-space:nowrap;}
   .pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap;flex-shrink:0;}
   .pill.ok{background:#4f7d5f;color:#fff;} /* done / passed: deep green */
   .pill.tag{background:var(--ok-soft);color:var(--ok);} /* plain label such as 主管 (not a status) */
@@ -165,7 +166,7 @@ function storageSet(key, value){
 
 /* Shared backend: Google Apps Script + Google Sheet */
 // Shown on the login screen and in the sidebar, so it is easy to tell which build is actually live.
-const APP_VERSION = '2026.10.19-E 更新時間含日期';
+const APP_VERSION = '2026.10.19-F 完整日期時間';
 const API_URL = 'https://script.google.com/macros/s/AKfycbzECIWlnmrXBzrZUNwLVyxF7geQMGJK-QddoeWCzd5WtEDMdixD3sKhKKKYT2owa5LJcQ/exec';
 let __jsonpCounter = 0;
 function jsonpRequest(params, ms){
@@ -932,11 +933,12 @@ function showQuizAttemptDetail(staffId, courseId, idx){
 
 function currentUser(){ return STATE.staff.find(s=>s.id===STATE.currentUserId) || STATE.staff[0]; }
 function userProgress(staffId){ return STATE.progress[staffId] || {}; }
+// Every time shown anywhere (watch / quiz / notification / last login / data updated …) uses the full date: 2026/10/16 11:31
 function fmtTime(iso){
   if(!iso) return '-';
   const d = new Date(iso);
   if(isNaN(d.getTime())) return '-';
-  return (d.getMonth()+1)+'/'+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+  return fmtDateTimeFull(d);
 }
 async function recordLastLogin(staffId){
   try{
@@ -1272,8 +1274,8 @@ function courseTimeInfoHtml(c){
 function courseListDate(c){
   const d = courseCreatedAt(c);
   if(!d) return '';
-  const sameYear = d.getFullYear() === new Date().getFullYear();
-  return '· 新增 ' + (sameYear? '' : d.getFullYear()+'/') + (d.getMonth()+1) + '/' + d.getDate();
+  const p = n => String(n).padStart(2,'0');
+  return '· 新增 ' + d.getFullYear() + '/' + p(d.getMonth()+1) + '/' + p(d.getDate());
 }
 
 /* ---------- Exempt from the quiz: clearly visible, and the quiz stays available as an option ---------- */
